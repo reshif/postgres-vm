@@ -1,0 +1,297 @@
+# =============================================================================
+# Universal Agent Memory Platform — local-first stack
+#
+#   cp .env.example .env && edit
+#   ops/pgbouncer/gen-userlist.sh          # writes ops/pgbouncer/userlist.txt
+#   docker compose up -d                    # migrations run automatically via `init`
+#   docker compose up -d --scale worker=2   # if you want more workers
+#
+# No external services required. No Redis (the queue lives in Postgres).
+# Every image is pinned: an unpinned tag is a supply-chain decision you did not make.
+#
+# CONNECTION TOPOLOGY — read this before changing any DATABASE_URL
+#
+#   api      ──► pgbouncer:6432 (transaction pooling)  ──► postgres:5432
+#   worker   ──► postgres:5432 DIRECT
+#   scheduler──► postgres:5432 DIRECT
+#   init     ──► postgres:5432 DIRECT
+#
+#   The API is the only service that should go through the pool. Everything else
+#   connects directly, and each for a specific reason:
+#
+#   * Workers use Procrastinate, which relies on LISTEN/NOTIFY. Notifications are
+#     session-scoped, and transaction-mode pooling hands the connection to another
+#     client between transactions — the listener silently stops receiving work and
+#     falls back to polling. It looks like "the queue is just slow." Do not route
+#     workers through a transaction pool.
+#   * Alembic takes session-level advisory locks and runs DDL. Both break or
+#     misbehave under transaction pooling.
+#   * The scheduler holds long-running consolidation transactions that would tie
+#     up pool slots the API needs.
+#
+#   This is also why the app must use SET LOCAL / set_config(..., true) for scope
+#   context: on the API path a connection is shared, and a bare SET leaks tenant
+#   context to the next request. See mem.fn_set_scope in 01-SCHEMA.sql.
+# =============================================================================
+
+x-common-env: &common-env
+  # Pooled path — API only.
+  MEMORY_DATABASE_URL: postgresql+psycopg://memory_app:${DB_APP_PASSWORD:?set in .env}@pgbouncer:6432/memory
+  # Direct path — workers, scheduler, migrations.
+  MEMORY_DATABASE_URL_DIRECT: postgresql+psycopg://memory_app:${DB_APP_PASSWORD:?set in .env}@postgres:5432/memory
+  # psycopg3 named prepared statements do not survive transaction pooling unless
+  # PgBouncer is handling them. We enable max_prepared_statements on PgBouncer AND
+  # cap the client side; if you see "prepared statement _pg3_N already exists",
+  # this is the knob.
+  MEMORY_DB_PREPARE_THRESHOLD: "0"
+  MEMORY_EMBEDDING_PROVIDER: local
+  MEMORY_EMBEDDING_URL: http://embeddings:80
+  MEMORY_EMBEDDING_MODEL: bge-m3@1
+  MEMORY_EMBEDDING_STARTUP_GRACE_S: "180"
+  MEMORY_LLM_PROVIDER: ${MEMORY_LLM_PROVIDER:-none}   # none | anthropic | openai | ollama
+  MEMORY_LLM_MODEL: ${MEMORY_LLM_MODEL:-}
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  OTEL_SERVICE_NAMESPACE: memory-platform
+  MEMORY_LOG_LEVEL: ${MEMORY_LOG_LEVEL:-info}
+
+services:
+
+  # ---------------------------------------------------------------- database
+  postgres:
+    # pgvector >= 0.8.2 on PG18: iterative scans, parallel HNSW builds, halfvec,
+    # and PG18 temporal constraints (WITHOUT OVERLAPS). Do not float this tag.
+    # If you must run < PG18, see the ADR-0006 portability branch in 01-SCHEMA.sql.
+    image: pgvector/pgvector:0.8.2-pg18
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c=shared_buffers=2GB
+      - -c=work_mem=64MB
+      - -c=maintenance_work_mem=1GB       # HNSW builds want this
+      - -c=max_parallel_maintenance_workers=4
+      - -c=effective_cache_size=6GB
+      - -c=random_page_cost=1.1           # SSD
+      - -c=log_min_duration_statement=200
+      - -c=shared_preload_libraries=pg_stat_statements
+      - -c=max_connections=200            # PgBouncer fronts the API; workers connect direct
+    environment:
+      POSTGRES_DB: memory
+      POSTGRES_USER: memory_owner
+      POSTGRES_PASSWORD: ${DB_OWNER_PASSWORD:?set in .env}
+      # Consumed by ops/initdb/01-roles.sql
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:?set in .env}
+      DB_RO_PASSWORD: ${DB_RO_PASSWORD:?set in .env}
+      DB_PGBOUNCER_PASSWORD: ${DB_PGBOUNCER_PASSWORD:?set in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./ops/initdb:/docker-entrypoint-initdb.d:ro   # roles (NOBYPASSRLS) + pgbouncer auth fn
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U memory_owner -d memory"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports: ["5432:5432"]                  # remove outside local dev
+
+  # ------------------------------------------------------- connection pooler
+  # Transaction mode, and actually on the API's connection path (it was previously
+  # defined but bypassed — a pool nobody connects to is worse than no pool, because
+  # it looks like coverage you do not have).
+  #
+  # Auth: auth_query against Postgres, with PgBouncer's own credential in
+  # userlist.txt. Generate it with ops/pgbouncer/gen-userlist.sh before first start.
+  pgbouncer:
+    image: edoburu/pgbouncer:1.24.0-p1
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: memory
+      LISTEN_PORT: "6432"
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      AUTH_FILE: /etc/pgbouncer/userlist.txt
+      AUTH_USER: pgbouncer_auth
+      AUTH_QUERY: SELECT username, password FROM pgbouncer.get_auth($$1)
+      MAX_CLIENT_CONN: "500"
+      DEFAULT_POOL_SIZE: "25"
+      MIN_POOL_SIZE: "5"
+      RESERVE_POOL_SIZE: "5"
+      # PgBouncer-managed prepared statements. Without this, psycopg3's named
+      # statements break under transaction pooling.
+      MAX_PREPARED_STATEMENTS: "200"
+      # psycopg/SQLAlchemy send these at startup; PgBouncer must not choke on them.
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,options,search_path
+      ADMIN_USERS: memory_owner
+      STATS_USERS: memory_owner
+    volumes:
+      - ./ops/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      # psql is present in this image; query the pooler's own admin console.
+      test: ["CMD-SHELL", "PGPASSWORD=$$DB_PGBOUNCER_PASSWORD psql -h 127.0.0.1 -p 6432 -U pgbouncer_auth -d pgbouncer -tAc 'SHOW POOLS' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    ports: ["6432:6432"]                  # remove outside local dev
+
+  # ------------------------------------------------------------- migrations
+  # Runs once and exits, so `docker compose up` is genuinely one command.
+  # Connects DIRECT: Alembic takes session advisory locks and runs DDL.
+  init:
+    build: { context: ., dockerfile: ops/Dockerfile, target: api }
+    environment:
+      <<: *common-env
+      MEMORY_ROLE: migrate
+    command: ["sh", "-c", "alembic -x url=$$MEMORY_DATABASE_URL_DIRECT upgrade head"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: "no"
+
+  # ------------------------------------------------------------- embeddings
+  # Text Embeddings Inference. The CPU image handles a small team's write volume.
+  # NOTE: no healthcheck. TEI's image ships no curl or wget, so the obvious
+  # healthcheck fails permanently and takes every dependent service down with it.
+  # The API tolerates a cold embedder by design (ADR-0008: retrieval degrades to
+  # the lexical arm rather than failing closed), so `service_started` is correct.
+  # Model download on first run takes minutes — watch it with:
+  #   docker compose logs -f embeddings
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    restart: unless-stopped
+    command: ["--model-id", "BAAI/bge-m3", "--pooling", "cls", "--max-batch-tokens", "16384"]
+    volumes:
+      - hfcache:/data
+    ports: ["8090:80"]                    # local probing: curl localhost:8090/health
+    # GPU variant: swap to :turing-1.8 / :86-1.8 and add a deploy.resources block.
+    # Zero-GPU laptop alternative: nomic-embed-text via ollama.
+
+  # Optional reranker — enable only after the eval suite proves it earns its latency.
+  # reranker:
+  #   image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+  #   command: ["--model-id", "BAAI/bge-reranker-v2-m3"]
+  #   profiles: ["rerank"]
+
+  # ---------------------------------------------------------------- core api
+  # The ONLY service on the pooled connection path.
+  api:
+    build: { context: ., dockerfile: ops/Dockerfile, target: api }
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      MEMORY_ROLE: api
+    depends_on:
+      postgres:   { condition: service_healthy }
+      pgbouncer:  { condition: service_healthy }
+      embeddings: { condition: service_started }
+      init:       { condition: service_completed_successfully }
+    ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+
+  # --------------------------------------------------------------- mcp edge
+  # Stateless per spec 2026-07-28: no session store, no sticky routing needed.
+  # Scale horizontally; it holds no state worth keeping.
+  mcp:
+    build: { context: ., dockerfile: ops/Dockerfile, target: mcp }
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      MEMORY_API_URL: http://api:8080
+      MCP_TRANSPORT: http
+      MCP_PROTOCOL_VERSION: "2026-07-28"
+      MCP_OAUTH_ISSUER: ${MCP_OAUTH_ISSUER:-}
+      MCP_OAUTH_AUDIENCE: ${MCP_OAUTH_AUDIENCE:-https://memory.local/mcp}
+    depends_on:
+      api: { condition: service_healthy }
+    ports: ["8081:8081"]
+
+  # ----------------------------------------------------------------- workers
+  # DIRECT to Postgres — Procrastinate needs LISTEN/NOTIFY (see the topology note).
+  # `deploy.replicas` is Swarm-only and silently ignored by `docker compose up`;
+  # scale explicitly instead:  docker compose up -d --scale worker=2
+  worker:
+    build: { context: ., dockerfile: ops/Dockerfile, target: worker }
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      MEMORY_DATABASE_URL: postgresql+psycopg://memory_app:${DB_APP_PASSWORD:?set in .env}@postgres:5432/memory
+      MEMORY_ROLE: worker
+      MEMORY_WORKER_QUEUES: embedding,ingestion,extraction
+    depends_on:
+      init: { condition: service_completed_successfully }
+
+  scheduler:
+    build: { context: ., dockerfile: ops/Dockerfile, target: worker }
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      MEMORY_DATABASE_URL: postgresql+psycopg://memory_app:${DB_APP_PASSWORD:?set in .env}@postgres:5432/memory
+      MEMORY_ROLE: scheduler        # consolidation, decay, conflicts, utility, reflection
+    depends_on:
+      init: { condition: service_completed_successfully }
+
+  # ----------------------------------------------------------------- console
+  console:
+    build: { context: ./console, dockerfile: Dockerfile }
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+      AUTH_ISSUER: ${MCP_OAUTH_ISSUER:-}
+    depends_on:
+      api: { condition: service_healthy }
+    ports: ["3000:3000"]
+
+  # ----------------------------------------------------------- observability
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.128.0
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes: ["./ops/otel-config.yaml:/etc/otel/config.yaml:ro"]
+
+  tempo:
+    image: grafana/tempo:2.9.0
+    restart: unless-stopped
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes: ["./ops/tempo.yaml:/etc/tempo/tempo.yaml:ro"]
+
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    restart: unless-stopped
+    volumes: ["./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+
+  grafana:
+    image: grafana/grafana:12.2.0
+    restart: unless-stopped
+    environment:
+      # LOCAL DEV ONLY. Anonymous viewer access is a security hole anywhere
+      # shared — the dashboards expose project names, memory counts and query
+      # text. The prod overlay must set these to "false" and wire real auth.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes: ["./ops/grafana:/etc/grafana/provisioning:ro"]
+    ports: ["3001:3000"]
+
+volumes:
+  pgdata:
+  hfcache:
+
+# -----------------------------------------------------------------------------
+# Notes
+#  * The MVP has no Redis and no separate vector or graph database. If you add
+#    one, write the ADR explaining what measurement forced it.
+#  * Workers have no inbound network exposure and should egress only to the
+#    embedding service and explicitly allow-listed connector hosts.
+#  * Host port bindings (5432, 6432, 8090) are local-dev conveniences. Strip them
+#    in the prod overlay along with anonymous Grafana.
+#  * Verifying the pool is actually carrying API traffic (not just running):
+#      docker compose exec pgbouncer psql -h 127.0.0.1 -p 6432 -U pgbouncer_auth \
+#        -d pgbouncer -c 'SHOW POOLS'
+#    cl_active on the `memory` pool should be non-zero while the API serves traffic.
+#    If it stays at zero, something is bypassing the pooler.
+# -----------------------------------------------------------------------------
