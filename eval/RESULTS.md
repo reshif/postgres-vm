@@ -18,6 +18,22 @@ the evaluator now fail with `golden_coverage` until there are at least 150 cases
 and 15 negatively labelled cases. The historical rows below remain useful
 diagnostics for ranking changes; they are not acceptance evidence.
 
+## Suite 6 and Suite 7 status
+
+The runnable contracts are now versioned, but no agent outcome has been
+recorded yet. Suite 6 defines four repository procedures over B and D, five
+times each, with a temperature-zero `llama3.2:3b` judge pinned to local Ollama
+artifact `a80c4f17acd5`. The full raw judge response, parsed rubric scores,
+model artifact and prompt fingerprint are mandatory persisted fields.
+
+Suite 7 defines 20 real repository tasks across all five ADR-0014 arms and all
+six capabilities. A completed run requires exactly 500 observations: 20 tasks
+times five arms times five repetitions. It records the full per-task metrics,
+capability scorecard, and D-vs-B headline gate. Missing, duplicate, or invalid
+observations yield `incomplete`; the runner does not substitute estimates. No
+go/no-go conclusion exists until that run has been executed against a fixed
+agent runner configuration.
+
 ---
 
 ## Snapshot `12d2cbc619bf41dc` — cross-encoder rerank ON, `top_k=10`

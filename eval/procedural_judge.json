@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "provider": "ollama",
+  "model": "llama3.2:3b",
+  "model_digest": "a80c4f17acd5",
+  "temperature": 0,
+  "prompt_version": "suite6-procedural-v1",
+  "prompt": "You are judging whether an agent followed a repository procedure. Use only the supplied procedure, required preconditions, known failure modes, task prompt, and agent output. Do not reward plausible but unsupported steps. Score each dimension from 0.0 to 1.0. Return one JSON object with keys steps_followed, preconditions_checked, failure_modes_handled, overall, verdict, and reasoning. verdict must be passed or failed. reasoning must cite concrete omissions or correct steps.",
+  "response_schema": {
+    "steps_followed": "number 0..1",
+    "preconditions_checked": "number 0..1",
+    "failure_modes_handled": "number 0..1",
+    "overall": "number 0..1",
+    "verdict": "passed|failed",
+    "reasoning": "string"
+  }
+}

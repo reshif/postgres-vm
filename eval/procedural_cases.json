@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "repetitions": 5,
+  "arms": ["B", "D"],
+  "cases": [
+    {"id":"p01","procedure_key":".memory:procedures/run-the-local-stack.md","prompt":"Bring up the local stack from a clean checkout and verify readiness.","preconditions":[".env contains the database credentials","ops/pgbouncer/gen-userlist.sh has generated userlist.txt","host Ollama has bge-m3 available"],"failure_modes":["PgBouncer cannot authenticate without userlist.txt","the stack cannot reach Ollama when it only listens on 127.0.0.1"]},
+    {"id":"p02","procedure_key":".memory:procedures/add-a-migration.md","prompt":"Add a database migration using the repository's supported procedure.","preconditions":["use the database migration workflow","run SQL on the raw connection where the procedure requires it","preserve the RLS policy implications"],"failure_modes":["a single percent in an exec_driver_sql string is treated as a DBAPI placeholder","a migration that ignores RLS does not preserve tenant isolation"]},
+    {"id":"p03","procedure_key":".memory:procedures/troubleshoot-the-embedder.md","prompt":"Troubleshoot embeddings that are unavailable from the API container.","preconditions":["check host-reachable OLLAMA_HOST","confirm the configured embedding model","confirm halfvec dimensionality"],"failure_modes":["localhost inside the container is not the host Ollama service","a model with the wrong embedding dimension cannot be inserted"]},
+    {"id":"p04","procedure_key":".memory:procedures/run-tests-and-eval.md","prompt":"Run the repository tests and retrieval evaluation after a ranking change.","preconditions":["run the complete suite","run the retrieval evaluation on the pinned corpus","record results against the current ranking profile"],"failure_modes":["tuning ranking weights only to pass the golden set produces no evidence","treating a changed corpus snapshot as a comparable regression is invalid"]}
+  ]
+}
