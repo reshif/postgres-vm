@@ -35,8 +35,10 @@ from uuid import UUID
 from sqlalchemy import text
 
 sys.path.insert(0, "/app/src")
+sys.path.insert(0, "/repo/eval")
 from memory_platform import context, db, evaluation, ingest, memories, ranking  # noqa: E402
 from memory_platform.config import settings  # noqa: E402
+from cases import forbidden_labels, suite_one_coverage_issues, validate_golden  # noqa: E402
 
 # A dedicated tenant, and it must NOT be the one the scheduler's dev binding
 # writes to. Those ids were the same, so poll ingestion kept adding live
@@ -174,6 +176,7 @@ def build_corpus() -> dict[str, str]:
 
 def run(case_ids: set[str] | None = None) -> int:
     golden = json.loads(GOLDEN.read_text("utf-8"))
+    validate_golden(golden)
     cases = golden["cases"]
     if case_ids:
         cases = [case for case in cases if case["id"] in case_ids]
@@ -187,7 +190,8 @@ def run(case_ids: set[str] | None = None) -> int:
     # corpus edits do not silently invalidate a case."
     drift, missing = [], []
     for c in cases:
-        for e in c["expect"]:
+        labelled = [*c["expect"], *forbidden_labels(c)]
+        for e in labelled:
             if e["key"] not in corpus:
                 missing.append((c["id"], e["key"]))
             elif e.get("hash") and e["hash"] != corpus[e["key"]][:12]:
@@ -228,7 +232,7 @@ def run(case_ids: set[str] | None = None) -> int:
             ranked = [key_by_id.get(str(h["id"]), "?") for h in hits]
             expected = {e["key"] for e in case["expect"]}
             grades = {e["key"]: int(e.get("grade", 3)) for e in case["expect"]}
-            forbid = set(case.get("forbid", []))
+            forbid = {label["key"] for label in forbidden_labels(case)}
 
             per_case.append({
                 "id": case["id"], "query": case["query"],
@@ -239,6 +243,10 @@ def run(case_ids: set[str] | None = None) -> int:
                 "mrr": mrr(ranked, expected),
                 "ndcg@10": ndcg_at_k(ranked, grades, 10),
                 "forbidden@10": forbidden_at_k(ranked, forbid, 10),
+                "forbidden_positions": {
+                    key: (ranked.index(key) + 1) if key in ranked else None
+                    for key in sorted(forbid)
+                },
                 "top": ranked[:3],
                 "candidate_depth": len(ranked),
                 "expected_positions": {
@@ -252,7 +260,9 @@ def run(case_ids: set[str] | None = None) -> int:
     agg["forbidden@10"] = sum(c["forbidden@10"] for c in per_case)
 
     p95_latency = sorted(latencies)[int(len(latencies)*0.95)-1]
-    failures = gate_failures(agg, p95_latency)
+    coverage_issues = suite_one_coverage_issues(golden)
+    failures = [*gate_failures(agg, p95_latency), *(
+        ["golden_coverage"] if coverage_issues else [])]
     run_status = "passed" if not failures else "failed"
     with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
         profile, _ = ranking.load_profile(c)
@@ -262,7 +272,8 @@ def run(case_ids: set[str] | None = None) -> int:
             corpus_snapshot=str(golden.get("snapshot") or ""),
             ranking_profile=profile,
             metrics={**agg, "p95_latency_ms": round(p95_latency, 3),
-                     "forbidden@10": agg["forbidden@10"], "case_count": len(cases)},
+                     "forbidden@10": agg["forbidden@10"], "case_count": len(cases),
+                     "forbidden_labelled_cases": sum(bool(forbidden_labels(case)) for case in cases)},
             configuration={"rerank_enabled": settings().rerank_enabled,
                            "embedding_model": settings().embedding_model},
             cases=[{
@@ -283,6 +294,10 @@ def run(case_ids: set[str] | None = None) -> int:
     print(f"  {'forbidden@10':12} {fk:.0f}  (gate 0){'  PASS' if fk == 0 else '  FAIL'}")
     print(f"  {'p95 latency':12} {p95_latency:.0f} ms  (gate < {LATENCY_GATE_MS:.0f} ms)"
           f"  {'PASS' if p95_latency < LATENCY_GATE_MS else 'FAIL'}")
+    if coverage_issues:
+        print("  Suite 1 coverage  INCOMPLETE")
+        for issue in coverage_issues:
+            print(f"    - {issue}")
 
     worst = sorted(per_case, key=lambda c: (c["recall@5"], c["mrr"]))[:5]
     print(f"\nWeakest cases (these are where to look, not the average):")

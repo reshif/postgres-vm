@@ -8,6 +8,16 @@ Gates (04-EVALUATION.md §3 and 05-BUILD-PLAN Phase 3): `recall@5 ≥ 0.90`,
 `MRR ≥ 0.75`, `nDCG@10 ≥ 0.70`, `forbidden@10 = 0`, and p95 search latency
 `< 300 ms`.
 
+## Current acceptance status
+
+**Suite 1 is not complete.** The pinned corpus has 55 reviewed cases, below the
+150-case minimum, and none carries a reviewed `forbidden_memory_ids` label.
+That makes a reported `forbidden@10 = 0` vacuous: the evaluator has no unsafe
+or wrong result it is required to reject. `python eval/cases.py validate` and
+the evaluator now fail with `golden_coverage` until there are at least 150 cases
+and 15 negatively labelled cases. The historical rows below remain useful
+diagnostics for ranking changes; they are not acceptance evidence.
+
 ---
 
 ## Snapshot `12d2cbc619bf41dc` — cross-encoder rerank ON, `top_k=10`
@@ -28,9 +38,10 @@ iGPU (Vulkan).
 | forbidden@10 | 0 | 0 | 0 |
 | p95 latency | 548 ms | 6347 ms | < 300 ms |
 
-Every quality gate passes with a wider margin, and only latency fails. Enabled
-deliberately for single-user testing, where quality is worth seconds; it must be
-re-evaluated before multi-user use.
+The positive-label quality rows pass with a wider margin, while latency fails.
+They are diagnostic only until the current acceptance-status gap above is closed.
+Reranking remains enabled deliberately for single-user testing, where quality is
+worth seconds; it must be re-evaluated before multi-user use.
 
 ### Why `top_k=10` and not the blueprint's 40
 

@@ -513,11 +513,13 @@ def eval_case_template(
             "query": event["query_text"],
             "expect": [],
             "forbid": [],
+            "forbidden_memory_ids": [],
         },
         "candidates": candidates,
         "review": (
             "Select only the memories that truly answer the query into `case.expect`; "
-            "the returned list is a suggestion, not ground truth."
+            "mark a returned memory forbidden only when returning it would be wrong or unsafe. "
+            "The returned list is a suggestion, not ground truth."
         ),
     }
 
