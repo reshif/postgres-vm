@@ -493,6 +493,7 @@
       "expect": [
         {
           "key": "planeb:embedder-oom-warmup",
+          "hash": "f088b1dde7b6",
           "grade": 3
         }
       ],
@@ -504,6 +505,7 @@
       "expect": [
         {
           "key": "planeb:memory-versions-rls-leak",
+          "hash": "2ef309071cdd",
           "grade": 3
         }
       ],
@@ -515,6 +517,7 @@
       "expect": [
         {
           "key": "planeb:missing-sequence-grants",
+          "hash": "778b444d0fa3",
           "grade": 3
         }
       ],
@@ -526,6 +529,7 @@
       "expect": [
         {
           "key": "planeb:postgres-c-equals-arg",
+          "hash": "0f410dbe770e",
           "grade": 3
         }
       ],
@@ -595,6 +599,7 @@
       "expect": [
         {
           "key": "planeb:switch-embeddings-to-ollama",
+          "hash": "2b1e9575e6b3",
           "grade": 3
         }
       ],
@@ -606,6 +611,7 @@
       "expect": [
         {
           "key": "planeb:pgbouncer-scram-verifier",
+          "hash": "7e9c4834c102",
           "grade": 3
         }
       ],
@@ -641,6 +647,7 @@
       "expect": [
         {
           "key": "planeb:missing-sequence-grants",
+          "hash": "778b444d0fa3",
           "grade": 3
         }
       ],
@@ -652,6 +659,7 @@
       "expect": [
         {
           "key": "planeb:embedder-oom-warmup",
+          "hash": "f088b1dde7b6",
           "grade": 3
         }
       ],
@@ -704,6 +712,7 @@
       "expect": [
         {
           "key": "planeb:temporal-constraint-blocks-edit",
+          "hash": "ff0e9892ace4",
           "grade": 3
         }
       ],

@@ -41,3 +41,25 @@ a new profile version.
 If the corpus is homogeneous — all one memory type, one tier, one day — the
 feature reranker cannot discriminate and the eval is measuring the embedding and
 lexical arms alone. Diversify the corpus before drawing conclusions about ranking.
+
+## Growing the golden set
+
+Use the Retrieval Debugger's **export as eval case** control on a real query. The
+download contains the query, the exact retrieval event, and stable candidate
+keys/content hashes. It intentionally leaves `case.expect` empty: the returned
+items are suggestions, not labels. A reviewer selects the memories that truly
+answer the query, assigns grades 1–3, and may add explicitly forbidden keys.
+
+Validate the current set before and after an addition:
+
+```sh
+python eval/cases.py validate
+python eval/cases.py add /path/to/eval-case.json --id g56       # preview
+python eval/cases.py add /path/to/eval-case.json --id g56 --write
+python eval/cases.py validate
+```
+
+The new case's keys and hashes must exist in the pinned corpus. If the query
+depends on newer Plane A content, deliberately run `python eval/snapshot.py`,
+review hash drift, and record a new baseline before adding the case. Do not make
+that snapshot change just to repair a failed retrieval score.

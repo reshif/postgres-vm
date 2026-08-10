@@ -542,9 +542,9 @@ function renderPack(pack, event) {
   foot.appendChild(el('div', { class: 'mono muted' },
     `profile ${pack.ranking_profile || '?'} · pack ${pack.pack_id || '?'}`));
 
-  // §3.6 starred affordance: export as an eval case. This is how the golden set
-  // stays representative instead of going stale — real production queries, with
-  // what was actually returned marked as the expected answer.
+  // §3.6 starred affordance: export a REVIEWABLE eval case. The API resolves
+  // opaque refs to stable memory keys and hashes in the current scope; returned
+  // candidates remain suggestions, never automatically accepted labels.
   foot.appendChild(el('button', {
     onclick: () => exportEvalCase(pack),
   }, 'export as eval case'));
@@ -552,27 +552,27 @@ function renderPack(pack, event) {
   return f;
 }
 
-function exportEvalCase(pack) {
-  const expected = [];
-  for (const list of Object.values(pack.sections || {})) {
-    (list || []).forEach((it) => { if (it && it.ref) expected.push(it.title); });
+async function exportEvalCase(pack) {
+  if (!pack.pack_id) {
+    toast('No retrieval event is available to export');
+    return;
   }
-  const blob = new Blob([JSON.stringify({
-    query: pack.task,
-    intent: (pack.plan || {}).intent,
-    expected_titles: expected,
-    captured_from: pack.pack_id,
-    ranking_profile: pack.ranking_profile,
-    note: 'Review expected_titles before adding to the golden set.',
-  }, null, 2)], { type: 'application/json' });
-  const a = el('a', {
-    href: URL.createObjectURL(blob),
-    download: `eval-case-${(pack.pack_id || 'pack').replace(/[^\w-]/g, '')}.json`,
-  });
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  toast('Exported — review the expected set before committing it');
+  try {
+    const data = await api('/v1/eval/case-template?' + q({ pack_id: pack.pack_id }));
+    const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)],
+      { type: 'application/json' }));
+    const a = el('a', {
+      href: url,
+      download: `eval-case-${pack.pack_id.replace(/[^\w-]/g, '')}.json`,
+    });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+    toast('Exported — select reviewed expectations before adding it');
+  } catch (e) {
+    toast('Could not export eval case — ' + e.message);
+  }
 }
 
 const count = (v) => Array.isArray(v) ? v.length : (typeof v === 'number' ? v : (v && v.count) || 0);

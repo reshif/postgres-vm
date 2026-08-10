@@ -288,6 +288,67 @@ def explain(
         }
 
 
+@app.get("/v1/eval/case-template")
+def eval_case_template(
+    tenant_id: UUID,
+    project_id: UUID,
+    pack_id: str,
+    principal_id: UUID | None = None,
+) -> dict:
+    """Export a reviewed-case template from a real context pack.
+
+    A context pack exposes opaque refs because an agent only needs a digest. A
+    golden case needs stable memory keys and hashes instead: UUIDs change after
+    a rebuild and titles are neither unique nor a valid retrieval assertion.
+    This endpoint resolves those refs inside the caller's existing scope and
+    deliberately returns suggestions, not a claimed ground-truth label.
+    """
+    _guard_read(str(tenant_id))
+    with db.scoped(tenant_id, principal_id or tenant_id, project_id) as conn:
+        event = conn.execute(text(
+            "SELECT query_text, returned_ids, ranking_profile, created_at "
+            "  FROM mem.retrieval_events WHERE pack_id = :p"),
+            {"p": pack_id},
+        ).mappings().one_or_none()
+        if not event:
+            raise HTTPException(404, "no retrieval event for pack")
+
+        ids = [str(item) for item in (event["returned_ids"] or [])]
+        rows = conn.execute(text(
+            "SELECT id, memory_key, content_hash, title "
+            "  FROM mem.memories WHERE id = ANY(CAST(:ids AS uuid[]))"),
+            {"ids": "{" + ",".join(ids) + "}"},
+        ).mappings().all() if ids else []
+
+    by_id = {str(row["id"]): row for row in rows}
+    candidates = [
+        {
+            "ref": memory_id,
+            "key": row["memory_key"],
+            "hash": row["content_hash"][:12],
+            "title": row["title"],
+        }
+        for memory_id in ids
+        if (row := by_id.get(memory_id)) is not None
+    ]
+    return {
+        "version": 1,
+        "captured_from": pack_id,
+        "captured_at": event["created_at"].isoformat(),
+        "ranking_profile": event["ranking_profile"],
+        "case": {
+            "query": event["query_text"],
+            "expect": [],
+            "forbid": [],
+        },
+        "candidates": candidates,
+        "review": (
+            "Select only the memories that truly answer the query into `case.expect`; "
+            "the returned list is a suggestion, not ground truth."
+        ),
+    }
+
+
 class IngestRequest(BaseModel):
     tenant_id: UUID
     project_id: UUID

@@ -23,6 +23,7 @@
  */
 'use strict';
 
+const fs = require('fs');
 const { chromium } = require('playwright');
 
 const BASE = process.env.CONSOLE_URL || 'http://console:3000';
@@ -332,9 +333,22 @@ const itemCount = (page) => page.locator('#view .item').count();
   const arms = await page.locator('.stage table tbody tr').count();
   check('every arm is accounted for, including empty ones', arms >= 4, `${arms} arms`);
 
-  // §3.6 starred affordance.
+  // §3.6 starred affordance. The export is a reviewed template: keys and
+  // content hashes are stable, but returned candidates never self-label as the
+  // expected answer.
   check('a real query can be exported as an eval case',
         (await page.locator('button', { hasText: 'export as eval case' }).count()) === 1);
+  const download = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('button', { hasText: 'export as eval case' }).click(),
+  ]).then(([d]) => d);
+  const exported = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
+  check('the export carries stable key/hash candidates',
+        exported.candidates.length > 0 && exported.candidates.every(
+          (item) => item.key && /^[0-9a-f]{12}$/.test(item.hash)),
+        JSON.stringify(exported.candidates[0] || {}).slice(0, 70));
+  check('the export requires a reviewer to choose expectations',
+        Array.isArray(exported.case.expect) && exported.case.expect.length === 0);
 
   // Trust ramp again, in a different view.
   const packTiers = await page.locator('.stage .item').first().getAttribute('class');

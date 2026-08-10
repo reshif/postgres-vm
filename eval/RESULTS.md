@@ -30,6 +30,16 @@ which made its drift warning non-actionable. The snapshot and evaluator now
 exclude that local CLI state. This is a new baseline, so it must not be compared
 to the measurements below. Phase 3 remains open because recall@5 and MRR fail.
 
+### Failure classification
+
+The five weakest cases were inspected with a 40-result diagnostic window. Their
+expected memories were present at ranks 11–22, not absent from the candidate
+set. The immediate problem is therefore semantic ranking, not an ANN/filter
+recall failure: expand the traced benchmark before choosing a reranking or query
+expansion change. The evaluator now prints those expected positions for every
+weak case, and the debugger exports a review-only template with stable keys and
+content hashes to make that expansion auditable.
+
 ---
 
 ## Snapshot `12234ea8ad9dff92` — corpus fingerprint `977030b6db0e`

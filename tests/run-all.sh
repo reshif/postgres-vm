@@ -15,7 +15,7 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-SUITES="test_rls_coverage test_isolation test_write_path test_ingest test_context test_planner test_capture test_binding test_entities test_injection test_conflicts test_inbox test_extraction test_temporal test_maintenance test_limits test_auth test_eval_snapshot"
+SUITES="test_rls_coverage test_isolation test_write_path test_ingest test_context test_planner test_capture test_binding test_entities test_injection test_conflicts test_inbox test_extraction test_temporal test_maintenance test_limits test_auth test_eval_snapshot test_eval_cases test_eval_export"
 FAILED=""
 
 # Ordered deliberately: RLS coverage runs FIRST. It is the structural check, and

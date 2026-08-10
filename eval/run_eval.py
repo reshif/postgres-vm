@@ -21,6 +21,7 @@ Exits non-zero if a gate fails, so it works as a CI gate unchanged.
 """
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import math
@@ -154,9 +155,15 @@ def build_corpus() -> dict[str, str]:
     return {k: h for k, h in rows}
 
 
-def run() -> int:
+def run(case_ids: set[str] | None = None) -> int:
     golden = json.loads(GOLDEN.read_text("utf-8"))
     cases = golden["cases"]
+    if case_ids:
+        cases = [case for case in cases if case["id"] in case_ids]
+        missing_ids = case_ids - {case["id"] for case in cases}
+        if missing_ids:
+            print(f"unknown case id(s): {', '.join(sorted(missing_ids))}", file=sys.stderr)
+            return 2
     corpus = build_corpus()
 
     # §5: "cases are labelled with the memory IDs AND a stable content hash, so
@@ -193,7 +200,11 @@ def run() -> int:
             # Scope is required for entity resolution; without it the graph
             # arm receives NULL and the eval measures a four-arm system while
             # the product runs five.
-            hits = memories.search(c, case["query"], limit=10,
+            # Score top 10, but retain a deeper diagnostic window. A zero-recall
+            # case at rank 13 needs a different fix from one absent from all 40
+            # candidates; without this distinction every failure looks like a
+            # generic ranking problem.
+            hits = memories.search(c, case["query"], limit=40,
                                    tenant_id=TENANT, project_id=PROJECT)
             latencies.append((time.perf_counter() - t0) * 1000)
 
@@ -212,6 +223,11 @@ def run() -> int:
                 "ndcg@10": ndcg_at_k(ranked, grades, 10),
                 "forbidden@10": forbidden_at_k(ranked, forbid, 10),
                 "top": ranked[:3],
+                "candidate_depth": len(ranked),
+                "expected_positions": {
+                    key: (ranked.index(key) + 1) if key in ranked else None
+                    for key in sorted(expected)
+                },
             })
 
     agg = {m: statistics.mean(c[m] for c in per_case)
@@ -234,6 +250,11 @@ def run() -> int:
     for c in worst:
         print(f"  r@5={c['recall@5']:.2f} mrr={c['mrr']:.2f}  {c['query'][:52]}")
         print(f"        top: {[t.split('/')[-1] for t in c['top']]}")
+        positions = ", ".join(
+            f"{key.split('/')[-1]}=" + (str(rank) if rank else f"absent@{c['candidate_depth']}")
+            for key, rank in c["expected_positions"].items()
+        )
+        print(f"        expected: {positions}")
 
     failures = [m for m, g in GATES.items()
                 if (agg[m] > g if m.startswith("forbidden") else agg[m] < g)]
@@ -245,4 +266,8 @@ def run() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(run())
+    args = argparse.ArgumentParser(description="Run Suite 1 retrieval evaluation")
+    args.add_argument("--case", action="append", dest="case_ids",
+                      help="run one golden case id; repeat for multiple cases")
+    parsed = args.parse_args()
+    sys.exit(run(set(parsed.case_ids) if parsed.case_ids else None))
