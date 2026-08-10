@@ -1,0 +1,227 @@
+/* Knowledge Console — design tokens from 03-FRONTEND-KNOWLEDGE-CONSOLE.md §1.
+ *
+ * The trust ramp is the ONLY saturated colour language in the product. That
+ * constraint is the feature: if colour always means trust, then a coloured pixel
+ * is always information, and a reviewer can tell authoritative from quarantined
+ * without reading. Nothing else here is allowed to be colourful. */
+
+:root {
+  --surface:        #0E1116;
+  --raised:         #161B22;
+  --overlay:        #1C2430;
+  --line:           #232B36;
+
+  --ink:            #E6EDF3;
+  --ink-2:          #9AA7B4;
+  --ink-3:          #6B7785;
+
+  /* Trust ramp. Also the sort order of consequence. */
+  --authoritative:  #4CC38A;
+  --verified:       #57A6FF;
+  --observed:       #9AA7B4;
+  --inferred:       #E3B341;
+  --untrusted:      #F0616D;
+
+  --accent:         #7C7CF0;   /* interactive only, never decorative */
+
+  --radius: 4px;
+  --row: 32px;
+  --mono: "Berkeley Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ui: "Inter Tight", Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font: 14px/20px var(--ui);
+  letter-spacing: -0.01em;
+}
+
+/* Motion on state change only — no ambient movement in an operator tool. */
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+
+/* ---------------------------------------------------------------- topbar */
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  height: 44px; padding: 0 14px;
+  background: var(--raised);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 20;
+}
+.brand { font-weight: 600; letter-spacing: -0.02em; }
+.spacer { flex: 1; }
+.switcher { display: flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: 12px; }
+.switcher select {
+  background: var(--overlay); color: var(--ink); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 3px 6px; font: inherit; font-size: 13px;
+}
+#nav { display: flex; gap: 2px; }
+#nav a {
+  color: var(--ink-2); text-decoration: none; padding: 4px 9px;
+  border-radius: var(--radius); font-size: 13px;
+}
+#nav a:hover { background: var(--overlay); color: var(--ink); }
+#nav a.on { background: var(--overlay); color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); }
+
+.conn { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.conn.ok { color: var(--authoritative); }
+.conn.down { color: var(--untrusted); }
+
+/* ------------------------------------------------------------------ main */
+main { padding: 18px 16px 64px; max-width: 1100px; margin: 0 auto; outline: none; }
+h1 { font-size: 17px; margin: 0 0 2px; letter-spacing: -0.02em; }
+h2 { font-size: 14px; margin: 22px 0 8px; color: var(--ink-2); font-weight: 600; }
+.sub { color: var(--ink-3); font-size: 12px; margin: 0 0 16px; }
+.muted { color: var(--ink-3); font-size: 12px; }
+.mono { font-family: var(--mono); font-size: 12px; }
+a { color: var(--accent); }
+
+/* ------------------------------------------------------------------ cards */
+.card {
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px;
+}
+.item {
+  background: var(--raised); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 10px 12px 10px 0; margin-bottom: 8px;
+  transition: border-color 120ms ease-out, background 120ms ease-out;
+}
+/* The cursor must NOT repaint the left border. `border-color: var(--accent)`
+ * was the obvious rule and it silently overwrote the trust ramp on whichever
+ * row the reviewer was looking at — so the one item under active consideration
+ * was the one item whose trust you could not see. §1 principle 1 calls the trust
+ * encoding "persistent, non-negotiable"; selection is drawn with everything
+ * except the left edge. */
+.item.cursor {
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: var(--overlay);
+}
+.item .meta {
+  display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
+  font-size: 11px; color: var(--ink-3); font-family: var(--mono);
+}
+.item .title { font-weight: 600; margin: 3px 0; letter-spacing: -0.01em; }
+.item .digest { color: var(--ink-2); font-size: 13px; }
+.item .flag {
+  color: var(--untrusted); font-size: 12px; margin-top: 6px;
+  font-family: var(--mono);
+}
+.item .actions { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------- buttons */
+button, .btn {
+  background: var(--overlay); color: var(--ink);
+  border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 4px 10px; font: inherit; font-size: 12px; cursor: pointer;
+  transition: border-color 120ms ease-out;
+}
+button:hover { border-color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.ghost { background: none; border-color: transparent; color: var(--ink-2); }
+button kbd { color: var(--ink-3); }
+kbd {
+  font-family: var(--mono); font-size: 11px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 3px; padding: 0 4px;
+}
+
+/* ----------------------------------------------------------------- tables */
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th {
+  text-align: left; color: var(--ink-3); font-weight: 500; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 0.04em;
+  border-bottom: 1px solid var(--line); padding: 6px 8px;
+}
+td { padding: 6px 8px; border-bottom: 1px solid var(--line); height: var(--row); }
+tr:last-child td { border-bottom: none; }
+td.num { text-align: right; font-family: var(--mono); }
+
+/* ------------------------------------------------------------------ forms */
+input[type=text], input[type=search], select, textarea {
+  background: var(--overlay); color: var(--ink); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 6px 8px; font: inherit;
+}
+input[type=search] { width: 100%; }
+.row { display: flex; gap: 8px; align-items: center; }
+.row > .grow { flex: 1; }
+
+/* ---------------------------------------------------------------- debugger */
+.stage { margin-bottom: 14px; }
+.stage h3 {
+  font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--ink-3); margin: 0 0 6px; font-weight: 500;
+}
+.bar {
+  display: inline-block; height: 6px; background: var(--accent);
+  border-radius: 2px; vertical-align: middle; min-width: 1px;
+}
+.parts { font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+.parts .pos { color: var(--authoritative); }
+.parts .neg { color: var(--untrusted); }
+.dropped { color: var(--ink-3); }
+.dropped .why { color: var(--untrusted); }
+
+/* ----------------------------------------------------------------- health */
+.big { font-size: 34px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; }
+.stats { display: flex; gap: 22px; flex-wrap: wrap; margin: 10px 0; }
+.stat .k { color: var(--ink-3); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.stat .v { font-size: 18px; font-family: var(--mono); }
+.stat .v.warn { color: var(--inferred); }
+.stat .v.bad { color: var(--untrusted); }
+
+/* ------------------------------------------------------------------ toast */
+.toast {
+  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+  background: var(--overlay); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 8px 14px; font-size: 13px;
+  display: flex; gap: 12px; align-items: center; z-index: 40;
+}
+.toast .undo { color: var(--accent); cursor: pointer; text-decoration: underline; }
+
+dialog {
+  background: var(--raised); color: var(--ink); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 18px 20px; max-width: 460px;
+}
+dialog::backdrop { background: rgba(0,0,0,.6); }
+.keys td { border: none; padding: 3px 10px 3px 0; height: auto; }
+
+.empty { color: var(--ink-3); padding: 28px 0; }
+.empty strong { color: var(--ink-2); display: block; margin-bottom: 4px; font-weight: 600; }
+.err { color: var(--untrusted); font-family: var(--mono); font-size: 12px; }
+
+/* ------------------------------------------------------------- trust ramp */
+/* Left border weight + glyph, identical in every view.
+ *
+ * LAST IN THE FILE ON PURPOSE. `.trust-untrusted` and `.item` are both single
+ * class selectors, so they have equal specificity and source order decides. With
+ * this block earlier, `.item { border: 1px solid var(--line) }` silently reset
+ * the left border and every row rendered the same neutral grey — the trust
+ * encoding was in the markup, in the class name, and invisible on screen.
+ * Anything that sets a border on a row must be declared above this line. */
+.trust {
+  border-left: 3px solid var(--observed);
+  padding-left: 10px;
+}
+.trust-authoritative { border-left-color: var(--authoritative); border-left-width: 5px; }
+.trust-verified      { border-left-color: var(--verified);      border-left-width: 4px; }
+.trust-observed      { border-left-color: var(--observed);      border-left-width: 3px; }
+.trust-inferred      { border-left-color: var(--inferred);      border-left-width: 2px; }
+.trust-untrusted     { border-left-color: var(--untrusted);     border-left-width: 2px;
+                       border-left-style: dashed; }
+
+.tier {
+  font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tier-authoritative { color: var(--authoritative); }
+.tier-verified      { color: var(--verified); }
+.tier-observed      { color: var(--observed); }
+.tier-inferred      { color: var(--inferred); }
+.tier-untrusted     { color: var(--untrusted); }

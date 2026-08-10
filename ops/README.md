@@ -82,6 +82,29 @@ docker compose exec postgres psql -U memory_owner -d memory -c \
 
 You should see worker/scheduler connections alongside pooled API connections.
 
+## Postgres restart-loops on first start
+
+Symptom, repeating in `docker compose logs postgres`:
+
+```
+Error: in 18+, these Docker images are configured to store database data in a
+       format which is compatible with "pg_ctlcluster" ...
+       Counter to that, there appears to be PostgreSQL data in:
+         /var/lib/postgresql/data (unused mount/volume)
+```
+
+Cause: PG18+ images moved the data directory into a major-version subdirectory
+(`/var/lib/postgresql/18/docker`) so `pg_upgrade --link` works without crossing a
+mount boundary. The volume must be mounted at `/var/lib/postgresql`, not at
+`/var/lib/postgresql/data` (docker-library/postgres#1259).
+
+The compose file mounts the correct path. If you created the volume with an
+earlier version, remove it:
+
+```sh
+docker compose down -v && docker compose up -d
+```
+
 ## Verifying isolation actually holds
 
 The single most important check in the stack, and it should be in CI, not a

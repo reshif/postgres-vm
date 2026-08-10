@@ -32,6 +32,12 @@ Everything the removed tools did is still reachable — through parameters on th
 
 Returned by `tools/list` in this deterministic order, with `ttlMs: 3600000` and `cacheScope: "public"`.
 
+> **Wire names use underscores.** This document names the tools `memory.context`, `memory.search`, `memory.write` and `memory.explain`, and that stays their identity here and in the ADRs. On the wire they are `memory_context`, `memory_search`, `memory_write`, `memory_explain`.
+>
+> A dot is not a legal character in an MCP tool name — names must match `[a-z0-9_-]`, a constraint inherited from the underlying function-calling APIs rather than from MCP itself. Clients enforce it *after* discovery, which fails in a particularly quiet way: VS Code connects, reports `Discovered 4 tools`, then rejects all four with `Tool "memory.context" is invalid`. The server looks healthy and every tool is unusable.
+>
+> `tools/call` accepts the dotted spelling as an alias, so callers written against this document keep working.
+
 ### 2.1 `memory.context`
 
 The primary tool. The agent states its situation; the engine returns the minimal sufficient pack.

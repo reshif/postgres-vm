@@ -1,0 +1,58 @@
+---
+id: project
+title: memory-platform project profile
+status: active
+date: 2026-08-10
+---
+
+# Project profile
+
+Universal agent memory platform. Postgres 18 + pgvector is the single store;
+there is no Redis, no separate vector database and no graph database.
+
+## Hard constraints
+
+- **One datastore.** Adding a second one requires an ADR explaining what
+  measurement forced it (ADR-0001).
+- **RLS with FORCE on every tenant-scoped table.** Isolation is a database
+  boundary, never an application convention (ADR-0007). A table carrying
+  `tenant_id` without RLS is a bug, and `tests/test_rls_coverage.py` fails the
+  build for it.
+- **The application role is `memory_app`, never the owner.** `memory_owner` is
+  the image superuser and bypasses RLS entirely, including FORCE. Any isolation
+  test that passes as the owner proves nothing.
+- **Scope is transaction-local.** `mem.fn_set_scope` uses `set_config(..., true)`
+  so a pooled connection cannot leak tenant context to the next request. There is
+  no unscoped connection helper for application code.
+- **Trust tier is assigned server-side from the source.** Callers cannot set it.
+- **Content over 8000 characters is rejected, never chunked.** One document is
+  one memory; half a decision retrieved as if whole is worse than nothing.
+- **Every image tag is pinned.** An unpinned tag is a supply-chain decision
+  nobody made.
+
+## Stack
+
+- Postgres 18, pgvector 0.8.2, `halfvec(1024)`, HNSW with cosine ops
+- PgBouncer in transaction mode, on the API path only
+- Procrastinate for the job queue, workers connect DIRECT (LISTEN/NOTIFY)
+- Embeddings: bge-m3, 1024-dim, L2-normalised, served by host Ollama
+- FastAPI for the API and the MCP edge; Alembic for migrations
+- OpenTelemetry → collector → Tempo; Prometheus + Grafana
+
+## Connection topology
+
+The API is the only service on the pooled path. Workers, the scheduler and
+migrations connect directly, because LISTEN/NOTIFY is session-scoped and Alembic
+takes session-level advisory locks — both break silently under transaction
+pooling rather than failing loudly.
+
+## Current state
+
+The foundation, Plane A ingestion, project binding, deterministic capture,
+retrieval, context assembly, four-tool MCP surface, curation inbox, extraction,
+entity/conflict work, and selected operational controls are implemented and
+covered by automated checks.
+
+Phase 3 is not accepted: Suite 1 currently misses the recall@5 and MRR gates.
+The cross-client Phase 4 milestone, the real curator-week Phase 5 trial, the
+five-arm Phase 6 benchmark, and the remaining Phase 8-9 work are still open.

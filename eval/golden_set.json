@@ -1,0 +1,714 @@
+{
+  "version": 1,
+  "corpus": "eval/corpus/.memory (pinned snapshot) + eval/plane_b.json seeds",
+  "note": "Seed set. 04-EVALUATION.md asks for 150-300 cases built by exporting and labelling real production queries; those do not exist yet, so these are hand-authored against the real ADR corpus. Replace with traced queries once the Retrieval Debugger has production traffic.",
+  "cases": [
+    {
+      "id": "g01",
+      "query": "why did we reject a separate vector database?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0001.md",
+          "hash": "941172dc5f76",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g02",
+      "query": "can I add Redis for caching?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0001.md",
+          "hash": "941172dc5f76",
+          "grade": 3
+        },
+        {
+          "key": ".memory:decisions/ADR-0010.md",
+          "hash": "0c20a9f0bd87",
+          "grade": 2
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g03",
+      "query": "where does authoritative knowledge live, git or the database?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0002.md",
+          "hash": "f3cf782f4aad",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g04",
+      "query": "why is knowledge kept in files instead of only rows?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0002.md",
+          "hash": "f3cf782f4aad",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g05",
+      "query": "how many MCP tools should we expose and why so few?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0003.md",
+          "hash": "b4e57d70644e",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g06",
+      "query": "should I add a memory_timeline tool?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0003.md",
+          "hash": "b4e57d70644e",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g07",
+      "query": "does the MCP server keep a session between calls?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0004.md",
+          "hash": "10b558e50378",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g08",
+      "query": "can the client tell us which project it is working on?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0004.md",
+          "hash": "10b558e50378",
+          "grade": 3
+        },
+        {
+          "key": ".memory:decisions/ADR-0007.md",
+          "hash": "3aa314ea28bc",
+          "grade": 2
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g09",
+      "query": "what happens to memory an LLM extracted from a README?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0005.md",
+          "hash": "7fa21f621525",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g10",
+      "query": "what is the quarantine tier for?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0005.md",
+          "hash": "7fa21f621525",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g11",
+      "query": "how do we answer what the team believed three months ago?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0006.md",
+          "hash": "0f2c5adc4df8",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g12",
+      "query": "why does every memory have two time ranges?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0006.md",
+          "hash": "0f2c5adc4df8",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g13",
+      "query": "how is tenant isolation actually enforced?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0007.md",
+          "hash": "3aa314ea28bc",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g14",
+      "query": "why FORCE row level security and not just RLS?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0007.md",
+          "hash": "3aa314ea28bc",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g15",
+      "query": "how are the retrieval arms combined into one ranking?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0008.md",
+          "hash": "1076b96b346a",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g16",
+      "query": "why reciprocal rank fusion instead of weighted scores?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0008.md",
+          "hash": "1076b96b346a",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g17",
+      "query": "how do we decide which memories matter most?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0009.md",
+          "hash": "293a5f4611a9",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g18",
+      "query": "is importance learned or computed?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0009.md",
+          "hash": "293a5f4611a9",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g19",
+      "query": "what runs background jobs, and why not Celery?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0010.md",
+          "hash": "0c20a9f0bd87",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g20",
+      "query": "do we need a message broker?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0010.md",
+          "hash": "0c20a9f0bd87",
+          "grade": 3
+        },
+        {
+          "key": ".memory:decisions/ADR-0001.md",
+          "hash": "941172dc5f76",
+          "grade": 2
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g21",
+      "query": "should the platform track the agent's current task?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0011.md",
+          "hash": "79d290f60456",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g22",
+      "query": "do we store goals and working memory?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0011.md",
+          "hash": "79d290f60456",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g23",
+      "query": "can knowledge from one project help another?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0012.md",
+          "hash": "7e5d3c53e084",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g24",
+      "query": "is cross-project sharing on by default?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0012.md",
+          "hash": "7e5d3c53e084",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g25",
+      "query": "how do we avoid being locked to one embedding vendor?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0013.md",
+          "hash": "3bcc4a176985",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g26",
+      "query": "can we swap the embedding model later?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0013.md",
+          "hash": "3bcc4a176985",
+          "grade": 3
+        },
+        {
+          "key": ".memory:decisions/ADR-0001.md",
+          "hash": "941172dc5f76",
+          "grade": 1
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g27",
+      "query": "how will we know the memory system actually helps?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0014.md",
+          "hash": "da94dc32a5c4",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g28",
+      "query": "what is the baseline we measure against?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0014.md",
+          "hash": "da94dc32a5c4",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g29",
+      "query": "who reviews the memory inbox?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0015.md",
+          "hash": "51ed4a4d63d1",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g30",
+      "query": "what happens if nobody curates the queue?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0015.md",
+          "hash": "51ed4a4d63d1",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g31",
+      "query": "how does untrusted content avoid becoming permanent instruction?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0005.md",
+          "hash": "7fa21f621525",
+          "grade": 3
+        },
+        {
+          "key": ".memory:decisions/ADR-0002.md",
+          "hash": "f3cf782f4aad",
+          "grade": 2
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g32",
+      "query": "what stops project B reading project A's decisions?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0007.md",
+          "hash": "3aa314ea28bc",
+          "grade": 3
+        },
+        {
+          "key": ".memory:decisions/ADR-0004.md",
+          "hash": "10b558e50378",
+          "grade": 1
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g33",
+      "query": "why is Postgres doing vector search, queueing and RLS all at once?",
+      "expect": [
+        {
+          "key": ".memory:decisions/ADR-0001.md",
+          "hash": "941172dc5f76",
+          "grade": 3
+        },
+        {
+          "key": ".memory:decisions/ADR-0010.md",
+          "hash": "0c20a9f0bd87",
+          "grade": 2
+        },
+        {
+          "key": ".memory:decisions/ADR-0007.md",
+          "hash": "3aa314ea28bc",
+          "grade": 1
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g34",
+      "query": "how do I run the stack locally from a clean checkout?",
+      "expect": [
+        {
+          "key": ".memory:procedures/run-the-local-stack.md",
+          "hash": "06e5420ce835",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g35",
+      "query": "what are the steps to add a database migration?",
+      "expect": [
+        {
+          "key": ".memory:procedures/add-a-migration.md",
+          "hash": "bee6dbb9ee86",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g36",
+      "query": "how do we run the test suites?",
+      "expect": [
+        {
+          "key": ".memory:procedures/run-tests-and-eval.md",
+          "hash": "e00e688bb098",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g37",
+      "query": "how do I debug the embedding service?",
+      "expect": [
+        {
+          "key": ".memory:procedures/troubleshoot-the-embedder.md",
+          "hash": "a53b4f0d1c61",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g38",
+      "query": "have we seen the embedder get killed before?",
+      "expect": [
+        {
+          "key": "planeb:embedder-oom-warmup",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g39",
+      "query": "did we ever leak data between tenants?",
+      "expect": [
+        {
+          "key": "planeb:memory-versions-rls-leak",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g40",
+      "query": "has a permission error ever blocked writes?",
+      "expect": [
+        {
+          "key": "planeb:missing-sequence-grants",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g41",
+      "query": "have we hit a postgres restart loop before?",
+      "expect": [
+        {
+          "key": "planeb:postgres-c-equals-arg",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g42",
+      "query": "what is Plane A?",
+      "expect": [
+        {
+          "key": ".memory:glossary.md",
+          "hash": "45d201942ded",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g43",
+      "query": "what does the trust lattice mean?",
+      "expect": [
+        {
+          "key": ".memory:glossary.md",
+          "hash": "45d201942ded",
+          "grade": 3
+        },
+        {
+          "key": ".memory:decisions/ADR-0005.md",
+          "hash": "7fa21f621525",
+          "grade": 2
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g44",
+      "query": "can I add a second datastore?",
+      "expect": [
+        {
+          "key": ".memory:project.yaml",
+          "hash": "fc938b0576f5",
+          "grade": 3
+        },
+        {
+          "key": ".memory:decisions/ADR-0001.md",
+          "hash": "941172dc5f76",
+          "grade": 2
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g45",
+      "query": "what conventions apply to database access?",
+      "expect": [
+        {
+          "key": ".memory:conventions.md",
+          "hash": "a432662e4992",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g46",
+      "query": "why did we move embeddings off TEI?",
+      "expect": [
+        {
+          "key": "planeb:switch-embeddings-to-ollama",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g47",
+      "query": "what happened with the pgbouncer password?",
+      "expect": [
+        {
+          "key": "planeb:pgbouncer-scram-verifier",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g48",
+      "query": "exec_driver_sql incomplete placeholder '%'",
+      "expect": [
+        {
+          "key": ".memory:conventions.md",
+          "hash": "a432662e4992",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g49",
+      "query": "OLLAMA_HOST connection refused from inside the container",
+      "expect": [
+        {
+          "key": ".memory:procedures/troubleshoot-the-embedder.md",
+          "hash": "a53b4f0d1c61",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g50",
+      "query": "permission denied for sequence memory_versions_id_seq",
+      "expect": [
+        {
+          "key": "planeb:missing-sequence-grants",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g51",
+      "query": "exit code 137 OOMKilled false",
+      "expect": [
+        {
+          "key": "planeb:embedder-oom-warmup",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g52",
+      "query": "db.scoped fn_set_scope transaction",
+      "expect": [
+        {
+          "key": ".memory:conventions.md",
+          "hash": "a432662e4992",
+          "grade": 3
+        },
+        {
+          "key": ".memory:glossary.md",
+          "hash": "45d201942ded",
+          "grade": 2
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g53",
+      "query": "halfvec(1024) dimension mismatch on insert",
+      "expect": [
+        {
+          "key": ".memory:procedures/troubleshoot-the-embedder.md",
+          "hash": "a53b4f0d1c61",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g54",
+      "query": "hnsw.iterative_scan relaxed_order overfiltering",
+      "expect": [
+        {
+          "key": ".memory:glossary.md",
+          "hash": "45d201942ded",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    },
+    {
+      "id": "g55",
+      "query": "memories_temporal_uniq WITHOUT OVERLAPS ExclusionViolation",
+      "expect": [
+        {
+          "key": "planeb:temporal-constraint-blocks-edit",
+          "grade": 3
+        }
+      ],
+      "forbid": []
+    }
+  ],
+  "snapshot": "12d2cbc619bf41dc"
+}

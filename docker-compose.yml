@@ -6,8 +6,19 @@
 #   docker compose up -d                    # migrations run automatically via `init`
 #   docker compose up -d --scale worker=2   # if you want more workers
 #
-# No external services required. No Redis (the queue lives in Postgres).
+# No Redis (the queue lives in Postgres).
 # Every image is pinned: an unpinned tag is a supply-chain decision you did not make.
+#
+# ONE external service: embeddings are served by Ollama running on the HOST
+#   ollama pull bge-m3        # 1.2 GB, 1024-dim, L2-normalised
+# This is a deliberate regression from the original "no external services"
+# promise, made because in-compose TEI could not fit this hardware (see the note
+# on the profile-gated `embeddings` service). It is the one thing here that
+# compose cannot start, pin, or reproduce on a colleague's machine — a fresh
+# clone needs Ollama installed and `OLLAMA_HOST=0.0.0.0:11434` before it works.
+# If that portability matters more than local memory headroom, run
+# `docker compose --profile tei up -d` on a box with ~16 GB for the VM and flip
+# MEMORY_EMBEDDING_PROVIDER back to `local`.
 #
 # CONNECTION TOPOLOGY — read this before changing any DATABASE_URL
 #
@@ -44,12 +55,58 @@ x-common-env: &common-env
   # cap the client side; if you see "prepared statement _pg3_N already exists",
   # this is the knob.
   MEMORY_DB_PREPARE_THRESHOLD: "0"
-  MEMORY_EMBEDDING_PROVIDER: local
-  MEMORY_EMBEDDING_URL: http://embeddings:80
+  # Embeddings run on host Ollama, not in this compose file. See ADR note at the
+  # bottom: this is a deliberate, documented break from "no external services".
+  # TEI (the `embeddings` service) is still here behind the `tei` profile — set
+  # these three back to local / http://embeddings:80 to switch, nothing else.
+  #
+  # host.docker.internal resolves to the Windows/macOS host on Docker Desktop; the
+  # extra_hosts entries below make it work on Linux too. Ollama must be listening
+  # on 0.0.0.0 (OLLAMA_HOST=0.0.0.0:11434), not its default 127.0.0.1, or every
+  # container gets connection-refused while `curl localhost:11434` works fine.
+  MEMORY_EMBEDDING_PROVIDER: ollama
+  MEMORY_EMBEDDING_URL: http://host.docker.internal:11434
+  # Logical registry id (mem.embedding_models.id), NOT the Ollama tag. The '@N'
+  # suffix versions the vector space so a re-embed is a new row, not a silent
+  # overwrite; the provider adapter maps 'bge-m3@1' -> ollama model 'bge-m3'.
   MEMORY_EMBEDDING_MODEL: bge-m3@1
   MEMORY_EMBEDDING_STARTUP_GRACE_S: "180"
-  MEMORY_LLM_PROVIDER: ${MEMORY_LLM_PROVIDER:-none}   # none | anthropic | openai | ollama
+  # Cross-encoder rerank (ADR-0013). Off unless the eval proves it wins.
+  MEMORY_RERANK_ENABLED: ${MEMORY_RERANK_ENABLED:-false}
+  MEMORY_RERANK_URL: ${MEMORY_RERANK_URL:-http://reranker:80}
+  MEMORY_RERANK_TOP_K: "40"
+  # Admission control (Phase 9). Off unless a deployment has tuned it: a limit
+  # nobody sized for the traffic is a self-inflicted outage waiting for a spike.
+  MEMORY_LIMITS_ENABLED: ${MEMORY_LIMITS_ENABLED:-false}
+  MEMORY_RATE_LIMIT_READ_RPS: ${MEMORY_RATE_LIMIT_READ_RPS:-50}
+  MEMORY_RATE_LIMIT_WRITE_RPS: ${MEMORY_RATE_LIMIT_WRITE_RPS:-10}
+  MEMORY_MAX_QUEUE_DEPTH: ${MEMORY_MAX_QUEUE_DEPTH:-10000}
+  MEMORY_MAX_MEMORIES_PER_TENANT: ${MEMORY_MAX_MEMORIES_PER_TENANT:-0}
+  # OAuth (ADR-0004). Set the issuer to switch identity from the dev binding to
+  # real tokens; the MCP gateway refuses the dev path once this is present.
+  MEMORY_OAUTH_ISSUER: ${MEMORY_OAUTH_ISSUER:-}
+  MEMORY_OAUTH_AUDIENCE: ${MEMORY_OAUTH_AUDIENCE:-}
+  MEMORY_OAUTH_JWKS_URL: ${MEMORY_OAUTH_JWKS_URL:-}
+  MEMORY_OAUTH_ALGORITHMS: ${MEMORY_OAUTH_ALGORITHMS:-RS256,ES256}
+  MEMORY_OAUTH_ORG_CLAIM: ${MEMORY_OAUTH_ORG_CLAIM:-org}
+  MEMORY_OAUTH_PROJECT_CLAIM: ${MEMORY_OAUTH_PROJECT_CLAIM:-project}
+  # Row count at which a per-tenant partial HNSW index is built
+  # automatically. 0 disables. Not a hard-coded 50k wait.
+  MEMORY_PARTIAL_INDEX_THRESHOLD: ${MEMORY_PARTIAL_INDEX_THRESHOLD:-5000}
+  # LLM extraction (Phase 5). `none` is the default and stays the default until a
+  # curator exists: ADR-0015 makes the Inbox a precondition for the extractor.
+  MEMORY_LLM_PROVIDER: ${MEMORY_LLM_PROVIDER:-none}   # none | ollama | openai | vllm
   MEMORY_LLM_MODEL: ${MEMORY_LLM_MODEL:-}
+  MEMORY_LLM_URL: ${MEMORY_LLM_URL:-http://host.docker.internal:11434}
+  MEMORY_LLM_TIMEOUT_S: ${MEMORY_LLM_TIMEOUT_S:-120}
+  MEMORY_LLM_MAX_CANDIDATES: ${MEMORY_LLM_MAX_CANDIDATES:-5}
+  # ADR-0015 kill switch. The plan's numbers are the defaults; they are knobs
+  # because a 3-person team and a 300-person one do not share a triage capacity.
+  MEMORY_CURATION_ALERT_DEPTH: ${MEMORY_CURATION_ALERT_DEPTH:-100}
+  MEMORY_CURATION_DISABLE_DEPTH: ${MEMORY_CURATION_DISABLE_DEPTH:-200}
+  MEMORY_CURATION_SUSTAINED_DAYS: ${MEMORY_CURATION_SUSTAINED_DAYS:-14}
+  MEMORY_ACCEPT_RATE_MIN: ${MEMORY_ACCEPT_RATE_MIN:-0.30}
+  MEMORY_ACCEPT_RATE_MAX: ${MEMORY_ACCEPT_RATE_MAX:-0.85}
   OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
   OTEL_SERVICE_NAMESPACE: memory-platform
   MEMORY_LOG_LEVEL: ${MEMORY_LOG_LEVEL:-info}
@@ -63,17 +120,30 @@ services:
     # If you must run < PG18, see the ADR-0006 portability branch in 01-SCHEMA.sql.
     image: pgvector/pgvector:0.8.2-pg18
     restart: unless-stopped
+    # `-c` and its value must be SEPARATE argv entries. Writing `-c=work_mem=64MB`
+    # makes postgres parse the parameter name as the empty string and die with
+    # `FATAL: unrecognized configuration parameter ""` — during the entrypoint's
+    # temporary-server phase, so the initdb.d role scripts never run either.
     command:
       - postgres
-      - -c=shared_buffers=2GB
-      - -c=work_mem=64MB
-      - -c=maintenance_work_mem=1GB       # HNSW builds want this
-      - -c=max_parallel_maintenance_workers=4
-      - -c=effective_cache_size=6GB
-      - -c=random_page_cost=1.1           # SSD
-      - -c=log_min_duration_statement=200
-      - -c=shared_preload_libraries=pg_stat_statements
-      - -c=max_connections=200            # PgBouncer fronts the API; workers connect direct
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - work_mem=64MB
+      - -c
+      - maintenance_work_mem=1GB          # HNSW builds want this
+      - -c
+      - max_parallel_maintenance_workers=4
+      - -c
+      - effective_cache_size=6GB
+      - -c
+      - random_page_cost=1.1              # SSD
+      - -c
+      - log_min_duration_statement=200
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - max_connections=200               # PgBouncer fronts the API; workers connect direct
     environment:
       POSTGRES_DB: memory
       POSTGRES_USER: memory_owner
@@ -83,7 +153,14 @@ services:
       DB_RO_PASSWORD: ${DB_RO_PASSWORD:?set in .env}
       DB_PGBOUNCER_PASSWORD: ${DB_PGBOUNCER_PASSWORD:?set in .env}
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # PG18+ images changed the mount convention: mount /var/lib/postgresql, NOT
+      # /var/lib/postgresql/data. The image now stores data in a major-version
+      # subdirectory (/var/lib/postgresql/18/docker) so pg_upgrade --link works
+      # without crossing a mount boundary. Mounting the old path makes the
+      # container refuse to start with "there appears to be PostgreSQL data in
+      # /var/lib/postgresql/data (unused mount/volume)" and restart-loop.
+      # See docker-library/postgres#1259.
+      - pgdata:/var/lib/postgresql
       - ./ops/initdb:/docker-entrypoint-initdb.d:ro   # roles (NOBYPASSRLS) + pgbouncer auth fn
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U memory_owner -d memory"]
@@ -100,51 +177,45 @@ services:
   # Auth: auth_query against Postgres, with PgBouncer's own credential in
   # userlist.txt. Generate it with ops/pgbouncer/gen-userlist.sh before first start.
   pgbouncer:
-    image: edoburu/pgbouncer:1.24.0-p1
+    # Pinned. An unpinned `latest` here will eventually change pool_mode defaults
+    # or config-file semantics under you, and the failure mode is a silent leak of
+    # scope context rather than a crash.
+    #
+    # Note the `v` prefix and the `-pN` image-patch suffix: this repo publishes
+    # `v1.25.2-p0`, NOT `1.25.2`. Tags without the prefix exist only up to 1.22.x,
+    # so a plausible-looking pin like `1.24.0-p1` fails to resolve at pull time.
+    image: edoburu/pgbouncer:v1.25.2-p0
     restart: unless-stopped
-    environment:
-      DB_HOST: postgres
-      DB_PORT: "5432"
-      DB_NAME: memory
-      LISTEN_PORT: "6432"
-      POOL_MODE: transaction
-      AUTH_TYPE: scram-sha-256
-      AUTH_FILE: /etc/pgbouncer/userlist.txt
-      AUTH_USER: pgbouncer_auth
-      AUTH_QUERY: SELECT username, password FROM pgbouncer.get_auth($$1)
-      MAX_CLIENT_CONN: "500"
-      DEFAULT_POOL_SIZE: "25"
-      MIN_POOL_SIZE: "5"
-      RESERVE_POOL_SIZE: "5"
-      # PgBouncer-managed prepared statements. Without this, psycopg3's named
-      # statements break under transaction pooling.
-      MAX_PREPARED_STATEMENTS: "200"
-      # psycopg/SQLAlchemy send these at startup; PgBouncer must not choke on them.
-      IGNORE_STARTUP_PARAMETERS: extra_float_digits,options,search_path
-      ADMIN_USERS: memory_owner
-      STATS_USERS: memory_owner
+    # Full config file rather than env-generated, so this behaves identically
+    # regardless of which pgbouncer image you use.
     volumes:
+      - ./ops/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
       - ./ops/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
     depends_on:
       postgres: { condition: service_healthy }
-    healthcheck:
-      # psql is present in this image; query the pooler's own admin console.
-      test: ["CMD-SHELL", "PGPASSWORD=$$DB_PGBOUNCER_PASSWORD psql -h 127.0.0.1 -p 6432 -U pgbouncer_auth -d pgbouncer -tAc 'SHOW POOLS' >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
+    # No healthcheck: this image ships no psql/pg_isready, so the obvious check
+    # fails permanently and drags every dependent service down. The API's /readyz
+    # exercises the pooled path and reports it, which is the check that matters.
     ports: ["6432:6432"]                  # remove outside local dev
 
   # ------------------------------------------------------------- migrations
   # Runs once and exits, so `docker compose up` is genuinely one command.
   # Connects DIRECT: Alembic takes session advisory locks and runs DDL.
+  #
+  # Connects as memory_owner, NOT memory_app. The migration creates schema `mem`
+  # and issues the GRANTs in 01-SCHEMA.sql to memory_app — neither of which the
+  # grantee can do for itself. memory_app holds only CONNECT (01-roles.sql), and
+  # since that file also revokes `public` from PUBLIC, memory_app's search_path
+  # resolves to nothing: alembic can't even place its version table, and you get
+  # `InvalidSchemaName: no schema has been selected to create in`.
+  # This is the ONE place owner credentials appear; no app service gets them.
   init:
     build: { context: ., dockerfile: ops/Dockerfile, target: api }
     environment:
       <<: *common-env
       MEMORY_ROLE: migrate
-    command: ["sh", "-c", "alembic -x url=$$MEMORY_DATABASE_URL_DIRECT upgrade head"]
+      MEMORY_DATABASE_URL_MIGRATE: postgresql+psycopg://memory_owner:${DB_OWNER_PASSWORD:?set in .env}@postgres:5432/memory
+    command: ["sh", "-c", "alembic -x url=$$MEMORY_DATABASE_URL_MIGRATE upgrade head"]
     depends_on:
       postgres: { condition: service_healthy }
     restart: "no"
@@ -158,20 +229,70 @@ services:
   # Model download on first run takes minutes — watch it with:
   #   docker compose logs -f embeddings
   embeddings:
+    # PROFILE-GATED — does not run by default. Embeddings are served by host
+    # Ollama (see x-common-env). Re-enable with:
+    #   docker compose --profile tei up -d
+    # and point MEMORY_EMBEDDING_PROVIDER/_URL back at local / http://embeddings:80.
+    #
+    # Why it was moved off TEI on this hardware: TEI allocates the MAXIMUM batch
+    # shape during warmup, and bge-m3 is XLM-RoBERTa-large, so at its 8192-token
+    # max_input_length that measured ~9.7 GB resident — 83% of a 12 GB Docker VM,
+    # never finishing warmup. TEI also refuses --max-batch-tokens below the model's
+    # max_input_length unless --auto-truncate is set, so there is no small-and-
+    # lossless setting available. llama.cpp sizes a KV cache to the actual context
+    # instead of the theoretical maximum, which is why the same model is ~2 GB
+    # under Ollama. This is a memory-architecture difference, not a tuning gap.
+    profiles: ["tei"]
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
     restart: unless-stopped
-    command: ["--model-id", "BAAI/bge-m3", "--pooling", "cls", "--max-batch-tokens", "16384"]
+    # --max-batch-tokens is a MEMORY ceiling, not a throughput dial. TEI warms up
+    # by allocating the maximum batch shape, and bge-m3 is XLM-RoBERTa-large, so
+    # attention is O(n^2): at 16384 tokens that is 16384^2 x 16 heads x 4 bytes of
+    # attention buffer before anything else. The container is SIGKILLed mid-warmup
+    # by the host kernel, which loops forever and — because no mem_limit is set —
+    # reports `OOMKilled=false`, so it reads as a mysterious silent restart rather
+    # than an OOM. `docker events --filter event=die` showing 137 is the tell.
+    #
+    # This value cannot go BELOW the model's max_input_length (8192 for bge-m3)
+    # unless --auto-truncate is set; TEI refuses to start otherwise. So 8192 is
+    # the floor that preserves full-fidelity embeddings, and it requires a Docker
+    # VM with room for it — see memory=12GB in %USERPROFILE%\.wslconfig. If you
+    # move this stack to a smaller host, the choice is --auto-truncate (silently
+    # truncates long inputs) or a smaller model, not a smaller number here.
+    command: ["--model-id", "BAAI/bge-m3", "--pooling", "cls", "--max-batch-tokens", "8192"]
     volumes:
       - hfcache:/data
     ports: ["8090:80"]                    # local probing: curl localhost:8090/health
     # GPU variant: swap to :turing-1.8 / :86-1.8 and add a deploy.resources block.
     # Zero-GPU laptop alternative: nomic-embed-text via ollama.
 
-  # Optional reranker — enable only after the eval suite proves it earns its latency.
-  # reranker:
-  #   image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
-  #   command: ["--model-id", "BAAI/bge-reranker-v2-m3"]
-  #   profiles: ["rerank"]
+  # Optional cross-encoder reranker (ADR-0013), profile-gated:
+  #     docker compose --profile rerank up -d
+  #     MEMORY_RERANK_ENABLED=true in .env
+  #
+  # bge-reranker-BASE, not -v2-m3. v2-m3 is the same 568M XLM-RoBERTa-large as the
+  # embedder and would repeat the warmup OOM documented on the `embeddings`
+  # service. base is 278M with a 512-token limit, so --max-batch-tokens can sit at
+  # the model's own maximum without tripping TEI's refusal to start below
+  # max_input_length.
+  #
+  # A cross-encoder scores (query, document) pairs jointly instead of comparing
+  # two independently-produced vectors, which is why it can fix the failure the
+  # eval actually shows: the right memory is in the candidate pool but ranked in
+  # the bottom half, because a whole-document embedding averages away the one
+  # paragraph that answers the question.
+  #
+  # It is OFF by default and stays off until the eval suite says it wins. That is
+  # ADR-0013's rule, not a formality — it costs a second model and real latency on
+  # the hot path.
+  reranker:
+    profiles: ["rerank"]
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    restart: unless-stopped
+    command: ["--model-id", "BAAI/bge-reranker-base", "--max-batch-tokens", "512"]
+    volumes:
+      - hfcache:/data
+    ports: ["8091:80"]
 
   # ---------------------------------------------------------------- core api
   # The ONLY service on the pooled connection path.
@@ -181,11 +302,33 @@ services:
     environment:
       <<: *common-env
       MEMORY_ROLE: api
+      # Read by GET /v1/console/config only, so the console can open on a working
+      # scope instead of an empty form. The API itself still takes tenant/project
+      # from the caller on every request — this grants nothing and binds nothing,
+      # it just tells the console where to start. Remove when OAuth lands.
+      MEMORY_DEV_TENANT_ID: ${MEMORY_DEV_TENANT_ID:-}
+      MEMORY_DEV_PROJECT_ID: ${MEMORY_DEV_PROJECT_ID:-}
+      MEMORY_DEV_PRINCIPAL_ID: ${MEMORY_DEV_PRINCIPAL_ID:-}
+    # No `embeddings` dependency: it is profile-gated now, and compose refuses to
+    # start a service that depends on an inactive-profile service. The embedder is
+    # a host process outside compose's lifecycle either way — /readyz reports it as
+    # degraded when cold, which is the ADR-0008 contract.
     depends_on:
       postgres:   { condition: service_healthy }
-      pgbouncer:  { condition: service_healthy }
-      embeddings: { condition: service_started }
+      pgbouncer:  { condition: service_started }
       init:       { condition: service_completed_successfully }
+    # Reach host Ollama. Docker Desktop provides this name natively; host-gateway
+    # makes the same compose file work on Linux.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # The checkout itself, READ-ONLY. Plane A ingestion reads `.memory/` from a
+      # working tree and shells out to `git log` for provenance, so it needs the
+      # real repo including .git. Read-only because ingestion must never be able
+      # to write to the source of truth it is indexing — Plane A is authoritative
+      # precisely because a human reviewed a diff into it.
+      # The eval harness reads the same tree as its corpus.
+      - .:/repo:ro
     ports: ["8080:8080"]
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/healthz"]
@@ -207,6 +350,14 @@ services:
       MCP_PROTOCOL_VERSION: "2026-07-28"
       MCP_OAUTH_ISSUER: ${MCP_OAUTH_ISSUER:-}
       MCP_OAUTH_AUDIENCE: ${MCP_OAUTH_AUDIENCE:-https://memory.local/mcp}
+      # DEV SCOPE BINDING. ADR-0004 resolves identity and project binding from
+      # the token; until MCP_OAUTH_ISSUER is set there is no token, so the
+      # gateway binds one project explicitly. It refuses to serve tools rather
+      # than defaulting, so an unset value fails loudly instead of quietly
+      # serving someone else's memory. Remove these when OAuth lands.
+      MEMORY_DEV_TENANT_ID: ${MEMORY_DEV_TENANT_ID:-}
+      MEMORY_DEV_PROJECT_ID: ${MEMORY_DEV_PROJECT_ID:-}
+      MEMORY_DEV_PRINCIPAL_ID: ${MEMORY_DEV_PRINCIPAL_ID:-}
     depends_on:
       api: { condition: service_healthy }
     ports: ["8081:8081"]
@@ -223,6 +374,9 @@ services:
       MEMORY_DATABASE_URL: postgresql+psycopg://memory_app:${DB_APP_PASSWORD:?set in .env}@postgres:5432/memory
       MEMORY_ROLE: worker
       MEMORY_WORKER_QUEUES: embedding,ingestion,extraction
+    # The `embedding` queue calls out to host Ollama.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       init: { condition: service_completed_successfully }
 
@@ -233,11 +387,32 @@ services:
       <<: *common-env
       MEMORY_DATABASE_URL: postgresql+psycopg://memory_app:${DB_APP_PASSWORD:?set in .env}@postgres:5432/memory
       MEMORY_ROLE: scheduler        # consolidation, decay, conflicts, utility, reflection
+      # Plane A poll ingestion. Off unless a scope binding exists — a background
+      # loop has no request to carry a token, so ADR-0004's "identity from the
+      # token" needs a service identity here eventually.
+      MEMORY_INGEST_ENABLED: ${MEMORY_INGEST_ENABLED:-false}
+      MEMORY_INGEST_INTERVAL_S: ${MEMORY_INGEST_INTERVAL_S:-60}
+      MEMORY_INGEST_REPO_PATH: /repo
+      MEMORY_DEV_TENANT_ID: ${MEMORY_DEV_TENANT_ID:-}
+      MEMORY_DEV_PROJECT_ID: ${MEMORY_DEV_PROJECT_ID:-}
+      MEMORY_DEV_PRINCIPAL_ID: ${MEMORY_DEV_PRINCIPAL_ID:-}
+    # Consolidation/reflection re-embed, so the scheduler needs the host route too.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Read-only: ingestion must never write to the tree it indexes. Plane A is
+      # authoritative precisely because a human reviewed a diff into it.
+      - .:/repo:ro
     depends_on:
       init: { condition: service_completed_successfully }
 
   # ----------------------------------------------------------------- console
   console:
+    # Phase 5. There is no app in ./console yet, so this is profile-gated and does
+    # not run — `docker compose up` must not require a frontend that the build plan
+    # deliberately schedules later. Enable with:
+    #   docker compose --profile console up -d
+    profiles: ["console"]
     build: { context: ./console, dockerfile: Dockerfile }
     restart: unless-stopped
     environment:

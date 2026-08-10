@@ -1,0 +1,72 @@
+[
+ {
+  "type": "failure",
+  "source": "ci",
+  "key": "embedder-oom-warmup",
+  "title": "Embedding container SIGKILLed during model warmup",
+  "content": "text-embeddings-inference was killed repeatedly while warming up BAAI/bge-m3. docker inspect reported OOMKilled false and the container simply restarted, because no mem_limit was set on the service so the host kernel did the killing rather than the container cgroup. docker events showed exit code 137 on every death. Root cause: TEI allocates the maximum batch shape at warmup and attention is quadratic, so 16384 max-batch-tokens on an XLM-RoBERTa-large model needed far more memory than the VM had."
+ },
+ {
+  "type": "failure",
+  "source": "ci",
+  "key": "memory-versions-rls-leak",
+  "title": "Cross-tenant leak through mem.memory_versions",
+  "content": "Tenant B read tenant A's confidential memory content out of mem.memory_versions while SELECT count(*) FROM mem.memories correctly returned zero. The versioning trigger writes to_jsonb of the whole row into memory_versions, which had no row level security at all. The readyz isolation self-test could not catch it because it only asserts that an unscoped read of mem.memories returns no rows, and that stayed true throughout."
+ },
+ {
+  "type": "failure",
+  "source": "ci",
+  "key": "missing-sequence-grants",
+  "title": "No memory could be written: permission denied for sequence",
+  "content": "Every insert into mem.memories failed with permission denied for sequence memory_versions_id_seq, raised from inside the versioning trigger. The schema granted SELECT, INSERT, UPDATE on all tables to memory_app but never granted the sequences, so the identity column was unusable. The error names the trigger and reads like a versioning bug rather than a grant bug."
+ },
+ {
+  "type": "failure",
+  "source": "ci",
+  "key": "postgres-c-equals-arg",
+  "title": "Postgres restart loop: unrecognized configuration parameter",
+  "content": "The postgres container restarted forever with FATAL: unrecognized configuration parameter empty string. The compose command passed settings as -c=shared_buffers=2GB. Postgres takes -c and its value as separate argv entries, so it split the optarg at the first equals sign and got an empty parameter name. It also killed the entrypoint's temporary server, so the initdb role scripts never ran and no application roles existed."
+ },
+ {
+  "type": "failure",
+  "source": "ci",
+  "key": "pgbouncer-scram-verifier",
+  "title": "PgBouncer: server login failed, wrong password type",
+  "content": "The pooler could not open its auth_query connection. userlist.txt held a SCRAM verifier. A stored verifier is what a server checks a handshake against, not a credential you can authenticate with; PgBouncer can only forward one through SCRAM pass-through using a client's handshake, and the auth_user connection has no client behind it. It needs the plaintext password for that one role."
+ },
+ {
+  "type": "failure",
+  "source": "ci",
+  "key": "mcp-tool-names-dots",
+  "title": "Every MCP tool was discovered and then rejected by the client",
+  "content": "VS Code connected, logged Discovered 4 tools, then rejected all four with Tool memory.context is invalid, names may only contain a-z0-9_- . A dot is not legal in an MCP tool name. The server looked completely healthy and not one tool was callable."
+ },
+ {
+  "type": "failure",
+  "source": "ci",
+  "key": "temporal-constraint-blocks-edit",
+  "title": "Editing an ingested file failed with ExclusionViolation",
+  "content": "Re-ingesting a changed ADR raised conflicting key value violates exclusion constraint memories_temporal_uniq. The previous version was still open, and the constraint is UNIQUE (tenant_id, memory_key, valid_at WITHOUT OVERLAPS). Archiving had the same defect: it set status but left valid_at open, so deleting a file and restoring it later failed permanently."
+ },
+ {
+  "type": "success",
+  "source": "ci",
+  "key": "cold-boot-green",
+  "title": "Clean checkout boots green in 18 seconds",
+  "content": "docker compose up -d --wait from a wiped volume brings every service healthy in about eighteen seconds, runs all migrations to head, and passes every suite."
+ },
+ {
+  "type": "episode",
+  "source": "commit",
+  "key": "pin-pgbouncer-tag",
+  "title": "Pinned the pgbouncer image tag",
+  "content": "Replaced the floating edoburu/pgbouncer latest tag with v1.25.2-p0. The repository uses a v prefix and a -pN image patch suffix, so a plausible looking pin like 1.24.0-p1 does not resolve at pull time."
+ },
+ {
+  "type": "episode",
+  "source": "commit",
+  "key": "switch-embeddings-to-ollama",
+  "title": "Moved embeddings from in-compose TEI to host Ollama",
+  "content": "The embedding service moved out of compose and onto host Ollama, cutting resident memory for the whole stack from roughly ten gigabytes to under five hundred megabytes. TEI stays available behind the tei profile. The cost is that the stack is no longer fully self-contained: a fresh clone now needs Ollama installed on the host."
+ }
+]

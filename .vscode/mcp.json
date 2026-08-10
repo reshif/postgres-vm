@@ -1,0 +1,9 @@
+{
+  "$schema": "https://modelcontextprotocol.io/schema/draft/2025-06-18/server.json",
+  "servers": {
+    "memory-platform": {
+      "type": "http",
+      "url": "http://localhost:8081/mcp"
+    }
+  }
+}

@@ -1,0 +1,3 @@
+# POSIX entrypoints are executed in Linux containers and Git Bash.
+*.sh text eol=lf
+*.sql text eol=lf

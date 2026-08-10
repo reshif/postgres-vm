@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge Console</title>
+<link rel="stylesheet" href="/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%230E1116'/><rect x='3' y='3' width='2.5' height='10' fill='%234CC38A'/><rect x='7' y='3' width='2.5' height='10' fill='%2357A6FF'/><rect x='11' y='3' width='2.5' height='10' fill='%23E3B341'/></svg>">
+</head>
+<body>
+
+<header class="topbar">
+  <span class="brand">Knowledge Console</span>
+  <label class="switcher">
+    project
+    <select id="project-switch" aria-label="Project"></select>
+  </label>
+  <nav id="nav"></nav>
+  <span class="spacer"></span>
+  <span id="conn" class="conn" title="API connectivity">&middot;</span>
+  <button id="help-btn" class="ghost" title="Keyboard shortcuts">?</button>
+</header>
+
+<main id="view" tabindex="-1"></main>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+<dialog id="help">
+  <h2>Keyboard</h2>
+  <table class="keys">
+    <tr><td><kbd>j</kbd> / <kbd>k</kbd></td><td>next / previous item</td></tr>
+    <tr><td><kbd>a</kbd></td><td>accept (promote to observed)</td></tr>
+    <tr><td><kbd>v</kbd></td><td>accept as verified</td></tr>
+    <tr><td><kbd>r</kbd></td><td>reject &mdash; asks for a reason</td></tr>
+    <tr><td><kbd>s</kbd></td><td>skip</td></tr>
+    <tr><td><kbd>u</kbd></td><td>undo the last decision (10s)</td></tr>
+    <tr><td><kbd>g</kbd> then <kbd>i</kbd>/<kbd>d</kbd>/<kbd>c</kbd>/<kbd>h</kbd></td>
+        <td>go to inbox / debugger / conflicts / health</td></tr>
+    <tr><td><kbd>?</kbd></td><td>this list</td></tr>
+  </table>
+  <p class="muted">Rejection archives with a reason. Nothing in this console deletes.</p>
+  <form method="dialog"><button class="primary">Close</button></form>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,182 @@
+"""Isolation and write-path tests — the negative tests Phase 1 requires.
+
+05-BUILD-PLAN.md: "RLS with FORCE from the very first migration. Retrofitting
+isolation is a rewrite, and the negative tests must exist before there is data to
+leak." This is that suite.
+
+It deliberately exercises the real application path — db.scoped(), the pooled
+PgBouncer connection, the memory_app role — rather than raw SQL as the owner.
+memory_owner is the image's POSTGRES_USER and therefore a SUPERUSER, which
+bypasses RLS entirely including FORCE. A test that passes as memory_owner proves
+nothing at all about isolation.
+
+Run inside the api container (it has the deps and the network names):
+
+    docker compose exec -T api python - < tests/test_isolation.py
+
+Re-runnable: each run writes memories under a fresh suffix, so nothing collides
+with the temporal unique constraint. Rows accumulate only under the two test
+tenants. memory_app holds no DELETE grant by design, so purging is an owner-side
+admin operation:
+
+    docker compose exec -T postgres psql -U memory_owner -d memory -c \\
+      "DELETE FROM mem.organizations WHERE slug IN ('tenant-a','tenant-b');"
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.request
+import uuid as _uuid
+from uuid import UUID
+
+# Fresh per run so re-running does not trip the temporal unique constraint on
+# (tenant, memory_key) — the test proves isolation, not upsert semantics.
+RUN = _uuid.uuid4().hex[:8]
+
+from sqlalchemy import text
+
+sys.path.insert(0, "/app/src")
+from memory_platform import db  # noqa: E402
+
+# Fixed ids so a re-run is idempotent and cleanup is trivial.
+TENANT_A = UUID("aaaaaaaa-0000-0000-0000-00000000000a")
+TENANT_B = UUID("bbbbbbbb-0000-0000-0000-00000000000b")
+PROJ_A = UUID("aaaaaaaa-0000-0000-0000-0000000000a1")
+PROJ_B = UUID("bbbbbbbb-0000-0000-0000-0000000000b1")
+PRIN_A = UUID("aaaaaaaa-0000-0000-0000-0000000000a2")
+PRIN_B = UUID("bbbbbbbb-0000-0000-0000-0000000000b2")
+MODEL = "bge-m3@1"
+
+OLLAMA = os.environ.get("MEMORY_EMBEDDING_URL", "http://host.docker.internal:11434")
+
+results: list[tuple[bool, str]] = []
+
+
+def check(name: str, ok: bool, detail: str = "") -> None:
+    results.append((ok, name))
+    print(f"  {'PASS' if ok else 'FAIL'}  {name}" + (f"  [{detail}]" if detail else ""))
+
+
+def embed(txt: str) -> str:
+    """Real embedding via Ollama, returned in pgvector literal form."""
+    req = urllib.request.Request(
+        f"{OLLAMA}/api/embed",
+        data=json.dumps({"model": "bge-m3", "input": txt}).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    vec = json.load(urllib.request.urlopen(req, timeout=60))["embeddings"][0]
+    assert len(vec) == 1024, f"expected 1024 dims, got {len(vec)}"
+    return "[" + ",".join(repr(float(x)) for x in vec) + "]"
+
+
+def seed() -> None:
+    """Tenants/projects/principals carry no RLS, so the app role can seed them."""
+    with db.engine().begin() as c:
+        for tid, slug in ((TENANT_A, "tenant-a"), (TENANT_B, "tenant-b")):
+            c.execute(text("INSERT INTO mem.organizations (id,slug,name) VALUES (:i,:s,:s) "
+                           "ON CONFLICT DO NOTHING"), {"i": str(tid), "s": slug})
+        for pid, tid, slug in ((PROJ_A, TENANT_A, "proj-a"), (PROJ_B, TENANT_B, "proj-b")):
+            c.execute(text("INSERT INTO mem.projects (id,tenant_id,slug,name) "
+                           "VALUES (:i,:t,:s,:s) ON CONFLICT DO NOTHING"),
+                      {"i": str(pid), "t": str(tid), "s": slug})
+        for prid, tid in ((PRIN_A, TENANT_A), (PRIN_B, TENANT_B)):
+            c.execute(text("INSERT INTO mem.principals (id,tenant_id,actor,external_id,display_name) "
+                           "VALUES (:i,:t,'agent',:e,'test') ON CONFLICT DO NOTHING"),
+                      {"i": str(prid), "t": str(tid), "e": f"ext-{prid}"})
+        c.execute(text("INSERT INTO mem.embedding_models (id,provider,dimensions,normalized,is_active,is_primary) "
+                       "VALUES (:m,'ollama',1024,true,true,true) ON CONFLICT DO NOTHING"), {"m": MODEL})
+
+
+INSERT_MEMORY = text("""
+INSERT INTO mem.memories
+  (tenant_id, memory_key, type, title, content, digest, scope_kind, project_id,
+   tier, source_type, content_hash)
+VALUES
+  (:tenant, :key, 'decision', :title, :content, :digest, 'project', :project,
+   'verified', 'test', :hash)
+RETURNING id
+""")
+
+
+def main() -> None:
+    seed()
+
+    # ---- 1. the write path that migration 0003 unblocked -------------------
+    print("\n1. Scoped write path (memory + embedding as memory_app)")
+    vec = embed("We chose Postgres over a dedicated vector database for the MVP.")
+    with db.scoped(TENANT_A, PRIN_A, PROJ_A) as c:
+        mid = c.execute(INSERT_MEMORY, {
+            "tenant": str(TENANT_A), "key": f"iso-test-{RUN}",
+            "title": "Use Postgres for vectors",
+            "content": "We chose Postgres over a dedicated vector database for the MVP.",
+            "digest": "Postgres chosen over dedicated vector DB.",
+            "project": str(PROJ_A), "hash": f"isohash-{RUN}",
+        }).scalar_one()
+        check("memory INSERT succeeds when scoped", True, str(mid)[:8])
+        c.execute(text("INSERT INTO mem.memory_embeddings (memory_id, model_id, tenant_id, embedding) "
+                       "VALUES (:m, :mo, :t, CAST(:v AS halfvec(1024)))"),
+                  {"m": str(mid), "mo": MODEL, "t": str(TENANT_A), "v": vec})
+        check("embedding INSERT succeeds (was blocked before 0003)", True)
+
+    # ---- 2. cross-tenant read ---------------------------------------------
+    print("\n2. Cross-tenant isolation")
+    with db.scoped(TENANT_B, PRIN_B, PROJ_B) as c:
+        n = c.execute(text("SELECT count(*) FROM mem.memories")).scalar_one()
+        check("tenant B sees 0 of tenant A's memories", n == 0, f"saw {n}")
+        ne = c.execute(text("SELECT count(*) FROM mem.memory_embeddings")).scalar_one()
+        check("tenant B sees 0 of tenant A's embeddings", ne == 0, f"saw {ne}")
+
+    with db.scoped(TENANT_A, PRIN_A, PROJ_A) as c:
+        n = c.execute(text("SELECT count(*) FROM mem.memories")).scalar_one()
+        check("tenant A still sees its own memory", n >= 1, f"saw {n}")
+
+    # ---- 3. unscoped ------------------------------------------------------
+    print("\n3. Unscoped access")
+    with db.engine().connect() as c:
+        n = c.execute(text("SELECT count(*) FROM mem.memories")).scalar_one()
+        check("unscoped connection sees 0 rows", n == 0, f"saw {n}")
+
+    # ---- 4. cross-tenant write forgery ------------------------------------
+    print("\n4. Write forgery (scope A, claim tenant B)")
+    try:
+        with db.scoped(TENANT_A, PRIN_A, PROJ_A) as c:
+            c.execute(INSERT_MEMORY, {
+                "tenant": str(TENANT_B), "key": f"forged-{RUN}", "title": "forged",
+                "content": "x", "digest": "x", "project": str(PROJ_B), "hash": f"forged-{RUN}",
+            })
+        check("forged cross-tenant INSERT is rejected", False, "IT SUCCEEDED")
+    except Exception as exc:
+        check("forged cross-tenant INSERT is rejected", "row-level security" in str(exc),
+              type(exc).__name__)
+
+    # ---- 5. retrieval -----------------------------------------------------
+    print("\n5. Hybrid retrieval returns the memory to its own tenant")
+    q = embed("why did we pick postgres for storing vectors")
+    with db.scoped(TENANT_A, PRIN_A, PROJ_A) as c:
+        rows = c.execute(text(
+            "SELECT memory_id, rrf_score, r_vec, r_lex FROM mem.search_hybrid("
+            "CAST(:v AS halfvec(1024)), :q, NULL, 'observed', now(), NULL, 10, 60)"
+        ), {"v": q, "q": "postgres vector database"}).all()
+        check("search_hybrid returns >=1 row for tenant A", len(rows) >= 1, f"{len(rows)} rows")
+        if rows:
+            print(f"      top: score={rows[0][1]:.5f} r_vec={rows[0][2]} r_lex={rows[0][3]}")
+
+    with db.scoped(TENANT_B, PRIN_B, PROJ_B) as c:
+        rows = c.execute(text(
+            "SELECT memory_id FROM mem.search_hybrid("
+            "CAST(:v AS halfvec(1024)), :q, NULL, 'observed', now(), NULL, 10, 60)"
+        ), {"v": q, "q": "postgres vector database"}).all()
+        check("search_hybrid returns 0 rows for tenant B", len(rows) == 0, f"{len(rows)} rows")
+
+    failed = [n for ok, n in results if not ok]
+    print(f"\n{'='*60}\n{len(results)-len(failed)}/{len(results)} passed")
+    if failed:
+        for n in failed:
+            print(f"  FAILED: {n}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
