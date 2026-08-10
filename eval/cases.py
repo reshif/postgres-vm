@@ -18,10 +18,32 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_GOLDEN = ROOT / "eval" / "golden_set.json"
 HASH = re.compile(r"^[0-9a-f]{12}$")
 CASE_ID = re.compile(r"^g\d+$")
+MIN_SUITE_ONE_CASES = 150
+MIN_FORBIDDEN_CASES = 15
 
 
 class CaseError(ValueError):
     """A case is syntactically valid JSON but unsuitable for the benchmark."""
+
+
+def forbidden_labels(case: dict[str, Any]) -> list[dict[str, str]]:
+    """Return stable negative labels from current and legacy case shapes.
+
+    ``forbid`` was the original export field. It carries only a stable
+    ``memory_key`` and remains supported so old debugger exports keep working.
+    New labels use ``forbidden_memory_ids`` with both the stable key and the
+    content hash. Database UUIDs are deliberately not used: re-ingestion gives
+    the same document a new UUID, which would make a durable benchmark drift.
+    """
+    labels = [{"key": key, "hash": ""} for key in case.get("forbid", [])]
+    labels.extend(case.get("forbidden_memory_ids", []))
+    by_key: dict[str, dict[str, str]] = {}
+    for label in labels:
+        key = label["key"]
+        # A hash-bearing label is more specific than the legacy key-only form.
+        if key not in by_key or label.get("hash"):
+            by_key[key] = label
+    return list(by_key.values())
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -59,10 +81,28 @@ def validate_case(case: dict[str, Any]) -> None:
         if not isinstance(grade, int) or grade not in (1, 2, 3):
             raise CaseError(f"expected grade for {key} must be 1, 2 or 3")
 
-    forbidden = case.get("forbid", [])
-    if not isinstance(forbidden, list) or not all(isinstance(key, str) and key for key in forbidden):
+    legacy_forbidden = case.get("forbid", [])
+    if (not isinstance(legacy_forbidden, list)
+            or not all(isinstance(key, str) and key for key in legacy_forbidden)):
         raise CaseError("case.forbid must be a list of stable keys")
-    overlap = expected_keys & set(forbidden)
+
+    forbidden = case.get("forbidden_memory_ids", [])
+    if not isinstance(forbidden, list):
+        raise CaseError("case.forbidden_memory_ids must be a list of labelled memories")
+    forbidden_keys: set[str] = set(legacy_forbidden)
+    for item in forbidden:
+        if not isinstance(item, dict):
+            raise CaseError("each forbidden item must be an object")
+        key, digest = item.get("key"), item.get("hash")
+        if not isinstance(key, str) or not key:
+            raise CaseError("forbidden item is missing its stable key")
+        if key in forbidden_keys:
+            raise CaseError(f"forbidden key is repeated: {key}")
+        forbidden_keys.add(key)
+        if not isinstance(digest, str) or not HASH.fullmatch(digest):
+            raise CaseError(f"forbidden hash for {key} must be 12 lowercase hex characters")
+
+    overlap = expected_keys & forbidden_keys
     if overlap:
         raise CaseError(f"a key cannot be expected and forbidden: {sorted(overlap)[0]}")
 
@@ -82,6 +122,27 @@ def validate_golden(golden: dict[str, Any]) -> None:
         ids.add(case_id)
 
 
+def suite_one_coverage_issues(golden: dict[str, Any]) -> list[str]:
+    """Report the missing coverage that would make Suite 1 vacuous.
+
+    This is intentionally separate from structural validation. A small fixture
+    remains useful while a curator is reviewing its first exports, but it must
+    never be presented as a completed 04-EVALUATION Suite 1 run.
+    """
+    validate_golden(golden)
+    cases = golden["cases"]
+    issues: list[str] = []
+    if len(cases) < MIN_SUITE_ONE_CASES:
+        issues.append(f"only {len(cases)} cases; Suite 1 requires at least {MIN_SUITE_ONE_CASES}")
+    negative_cases = sum(bool(forbidden_labels(case)) for case in cases)
+    if negative_cases < MIN_FORBIDDEN_CASES:
+        issues.append(
+            f"only {negative_cases} cases with forbidden_memory_ids; "
+            f"need at least {MIN_FORBIDDEN_CASES} to measure forbidden@k"
+        )
+    return issues
+
+
 def case_from_export(export: dict[str, Any], case_id: str) -> dict[str, Any]:
     if export.get("version") != 1:
         raise CaseError("export version must be 1")
@@ -93,6 +154,7 @@ def case_from_export(export: dict[str, Any], case_id: str) -> dict[str, Any]:
         "query": raw_case.get("query"),
         "expect": raw_case.get("expect"),
         "forbid": raw_case.get("forbid", []),
+        "forbidden_memory_ids": raw_case.get("forbidden_memory_ids", []),
     }
     validate_case(case)
     return case
@@ -127,7 +189,14 @@ def main(argv: list[str] | None = None) -> int:
         golden = load_json(args.golden)
         if args.command == "validate":
             validate_golden(golden)
+            issues = suite_one_coverage_issues(golden)
             print(f"valid: {len(golden['cases'])} cases, snapshot {golden.get('snapshot', '?')}")
+            if issues:
+                print("Suite 1 coverage is incomplete:", file=sys.stderr)
+                for issue in issues:
+                    print(f"  - {issue}", file=sys.stderr)
+                return 3
+            print("Suite 1 coverage is complete")
             return 0
 
         updated = add_case(golden, load_json(args.export), args.case_id)

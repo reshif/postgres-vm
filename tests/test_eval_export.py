@@ -67,7 +67,8 @@ def main() -> None:
               item["key"] and len(item["hash"]) == 12 for item in template["candidates"]),
           str(template["candidates"][:1]))
     check("template never marks a returned item as ground truth",
-          template["case"]["expect"] == [])
+          template["case"]["expect"] == []
+          and template["case"]["forbidden_memory_ids"] == [])
 
     try:
         api.eval_case_template(

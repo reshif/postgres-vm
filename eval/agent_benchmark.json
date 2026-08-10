@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "repository": "memory-platform-blueprint",
+  "repetitions": 5,
+  "arms": ["A", "B", "C", "D", "E"],
+  "arm_contract": {
+    "A": "Cold agent. No project memory, filesystem, or AGENTS.md.",
+    "B": "Filesystem plus grep plus AGENTS.md. Permanent honest baseline.",
+    "C": "Project memory retrieval only. No context assembly loop.",
+    "D": "Full memory loop: retrieval, context assembly, and MCP tools.",
+    "E": "All eligible project context. Cost ceiling, not a production configuration."
+  },
+  "tasks": [
+    {"id":"t01","capability":"C1","task_class":"rationale","prompt":"Explain why this project keeps vector search in PostgreSQL rather than adding a separate vector database. Cite the decision that establishes it.","expected_evidence":[".memory:decisions/ADR-0001.md"],"scorer":{"kind":"rubric","requires_provenance":true}},
+    {"id":"t02","capability":"C1","task_class":"rationale","prompt":"Explain why poll ingestion remains necessary when a webhook endpoint exists, and identify the intended low-latency path.","expected_evidence":[".memory:decisions/ADR-0016.md"],"scorer":{"kind":"rubric","requires_provenance":true}},
+    {"id":"t03","capability":"C1","task_class":"rationale","prompt":"Explain why Row Level Security is forced rather than merely enabled for the memory application role.","expected_evidence":[".memory:decisions/ADR-0007.md"],"scorer":{"kind":"rubric","requires_provenance":true}},
+    {"id":"t04","capability":"C2","task_class":"recurrence","prompt":"Diagnose repeated embedding-container exits with code 137 even though docker inspect says OOMKilled is false. State the prior root cause and corrective action.","expected_evidence":["planeb:embedder-oom-warmup"],"scorer":{"kind":"deterministic","requires_prior_failure":true}},
+    {"id":"t05","capability":"C2","task_class":"recurrence","prompt":"A tenant can read another tenant's historical memory_versions row while current memories remain isolated. Find the previous incident and the missing control.","expected_evidence":["planeb:memory-versions-rls-leak"],"scorer":{"kind":"deterministic","requires_prior_failure":true}},
+    {"id":"t06","capability":"C2","task_class":"recurrence","prompt":"PgBouncer cannot establish its auth_query connection after userlist.txt was populated with a SCRAM verifier. Identify the earlier failure and safe credential form.","expected_evidence":["planeb:pgbouncer-scram-verifier"],"scorer":{"kind":"deterministic","requires_prior_failure":true}},
+    {"id":"t07","capability":"C3","task_class":"temporal","prompt":"Describe how the platform answers what it believed at a past time without presenting superseded guidance as current fact.","expected_evidence":[".memory:decisions/ADR-0006.md"],"scorer":{"kind":"rubric","requires_temporal_reasoning":true}},
+    {"id":"t08","capability":"C3","task_class":"temporal","prompt":"Re-ingesting an edited ADR raises memories_temporal_uniq ExclusionViolation. Diagnose why and state how the previous temporal row must change.","expected_evidence":["planeb:temporal-constraint-blocks-edit"],"scorer":{"kind":"deterministic","requires_temporal_reasoning":true}},
+    {"id":"t09","capability":"C4","task_class":"authority","prompt":"An LLM extracts an instruction from a README. Explain its trust tier, whether it can become normal agent guidance, and the review path.","expected_evidence":[".memory:decisions/ADR-0005.md"],"scorer":{"kind":"rubric","requires_trust_attribution":true}},
+    {"id":"t10","capability":"C4","task_class":"authority","prompt":"Explain the curation-capacity rule for automatically extracted memory and what happens when the inbox cannot be reviewed safely.","expected_evidence":[".memory:decisions/ADR-0015.md"],"scorer":{"kind":"rubric","requires_trust_attribution":true}},
+    {"id":"t11","capability":"C5","task_class":"isolation","prompt":"A project B request asks for project A's database decision. Determine what may be returned and explain the isolation guarantee.","expected_evidence":[".memory:decisions/ADR-0007.md",".memory:decisions/ADR-0012.md"],"scorer":{"kind":"deterministic","requires_no_leakage":true}},
+    {"id":"t12","capability":"C5","task_class":"isolation","prompt":"A caller requests quarantined, unreviewed content as normal project guidance. Determine the correct response and why tier filtering is not optional.","expected_evidence":[".memory:decisions/ADR-0005.md"],"scorer":{"kind":"deterministic","requires_no_leakage":true}},
+    {"id":"t13","capability":"C6","task_class":"procedure","prompt":"From a clean checkout, bring up the local stack and verify it is ready. Include every prerequisite that would make the procedure fail.","expected_evidence":[".memory:procedures/run-the-local-stack.md"],"scorer":{"kind":"rubric","requires_procedure":true}},
+    {"id":"t14","capability":"C6","task_class":"procedure","prompt":"Add a database migration through the repository's supported path, including the required SQL execution convention and RLS consideration.","expected_evidence":[".memory:procedures/add-a-migration.md",".memory:conventions.md"],"scorer":{"kind":"rubric","requires_procedure":true}},
+    {"id":"t15","capability":"C6","task_class":"procedure","prompt":"Troubleshoot unavailable embeddings from a container, including the host Ollama address and the dimensionality check.","expected_evidence":[".memory:procedures/troubleshoot-the-embedder.md"],"scorer":{"kind":"rubric","requires_procedure":true}},
+    {"id":"t16","capability":"C6","task_class":"procedure","prompt":"Run the repository test suites and retrieval evaluation without tuning ranking weights to force a pass.","expected_evidence":[".memory:procedures/run-tests-and-eval.md"],"scorer":{"kind":"rubric","requires_procedure":true}},
+    {"id":"t17","capability":"C2","task_class":"anti_repetition","prompt":"Postgres is restart-looping because compose passes settings as -c=shared_buffers=2GB. Avoid the previously failed approach and provide the correct argv structure.","expected_evidence":["planeb:postgres-c-equals-arg"],"scorer":{"kind":"deterministic","requires_prior_failure":true}},
+    {"id":"t18","capability":"C2","task_class":"anti_repetition","prompt":"A memory write fails inside the versioning trigger with permission denied for memory_versions_id_seq. Find the known failure and the grant that was missed.","expected_evidence":["planeb:missing-sequence-grants"],"scorer":{"kind":"deterministic","requires_prior_failure":true}},
+    {"id":"t19","capability":"C1","task_class":"impact","prompt":"Assess the impact of replacing the scheduler with a second worker for repository reconciliation. Identify the race and the decision behind the existing split.","expected_evidence":[".memory:decisions/ADR-0016.md"],"scorer":{"kind":"rubric","requires_provenance":true}},
+    {"id":"t20","capability":"C4","task_class":"onboarding","prompt":"A new MCP client discovers every tool but rejects all of them as invalid. Explain the historical cause and the legal tool-name constraint.","expected_evidence":["planeb:mcp-tool-names-dots"],"scorer":{"kind":"deterministic","requires_trust_attribution":true}}
+  ]
+}

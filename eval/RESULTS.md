@@ -8,6 +8,32 @@ Gates (04-EVALUATION.md §3 and 05-BUILD-PLAN Phase 3): `recall@5 ≥ 0.90`,
 `MRR ≥ 0.75`, `nDCG@10 ≥ 0.70`, `forbidden@10 = 0`, and p95 search latency
 `< 300 ms`.
 
+## Current acceptance status
+
+**Suite 1 is not complete.** The pinned corpus has 55 reviewed cases, below the
+150-case minimum, and none carries a reviewed `forbidden_memory_ids` label.
+That makes a reported `forbidden@10 = 0` vacuous: the evaluator has no unsafe
+or wrong result it is required to reject. `python eval/cases.py validate` and
+the evaluator now fail with `golden_coverage` until there are at least 150 cases
+and 15 negatively labelled cases. The historical rows below remain useful
+diagnostics for ranking changes; they are not acceptance evidence.
+
+## Suite 6 and Suite 7 status
+
+The runnable contracts are now versioned, but no agent outcome has been
+recorded yet. Suite 6 defines four repository procedures over B and D, five
+times each, with a temperature-zero `llama3.2:3b` judge pinned to local Ollama
+artifact `a80c4f17acd5`. The full raw judge response, parsed rubric scores,
+model artifact and prompt fingerprint are mandatory persisted fields.
+
+Suite 7 defines 20 real repository tasks across all five ADR-0014 arms and all
+six capabilities. A completed run requires exactly 500 observations: 20 tasks
+times five arms times five repetitions. It records the full per-task metrics,
+capability scorecard, and D-vs-B headline gate. Missing, duplicate, or invalid
+observations yield `incomplete`; the runner does not substitute estimates. No
+go/no-go conclusion exists until that run has been executed against a fixed
+agent runner configuration.
+
 ---
 
 ## Snapshot `12d2cbc619bf41dc` — cross-encoder rerank ON, `top_k=10`
@@ -28,9 +54,10 @@ iGPU (Vulkan).
 | forbidden@10 | 0 | 0 | 0 |
 | p95 latency | 548 ms | 6347 ms | < 300 ms |
 
-Every quality gate passes with a wider margin, and only latency fails. Enabled
-deliberately for single-user testing, where quality is worth seconds; it must be
-re-evaluated before multi-user use.
+The positive-label quality rows pass with a wider margin, while latency fails.
+They are diagnostic only until the current acceptance-status gap above is closed.
+Reranking remains enabled deliberately for single-user testing, where quality is
+worth seconds; it must be re-evaluated before multi-user use.
 
 ### Why `top_k=10` and not the blueprint's 40
 
