@@ -37,10 +37,14 @@ REJECT_STATUS = "archived"
 
 # Ordering weight: how expensive it is to leave this item unreviewed.
 PRIORITY = {
-    "injection": 0,     # a security decision
-    "untrusted": 1,     # provenance we could not place
-    "conflict": 2,      # two live claims disagree
-    "inferred": 3,      # ordinary agent-written content
+    "injection": 0,       # a security decision
+    "untrusted": 1,       # provenance we could not place
+    "conflict": 2,        # two live claims disagree
+    "inferred": 3,        # ordinary agent-written content
+    # Below ordinary content on purpose. A wrong edge degrades retrieval
+    # ranking; a wrong memory states something false to an agent. Both deserve
+    # review, and when a reviewer has three minutes the memory goes first.
+    "proposed_edge": 4,
 }
 
 
@@ -91,6 +95,50 @@ def list_items(conn: Connection, *, tenant_id: UUID, project_id: UUID,
             "type": "conflict", "tier": None, "source": c["kind"],
             "source_uri": None, "age_days": c["age_days"], "why": [c["kind"]],
             "recorded_at": None,
+        })
+
+    # Inferred graph edges awaiting a human.
+    #
+    # These were stranded: entities.link_relations has been writing proposals
+    # since the graph arm was built, and nothing ever read the table. 51 of them
+    # had accumulated, invisible to the one screen whose job is to show a
+    # reviewer what is waiting. The blueprint's "inferred edges land in the
+    # inbox" was half-implemented — the producing half.
+    edges = conn.execute(
+        text("SELECT p.id, p.relation::text AS relation, p.confidence, "
+             "       s.canonical_name AS source_name, s.kind AS source_kind, "
+             "       t.canonical_name AS target_name, t.kind AS target_kind, "
+             "       m.title AS evidence_title, p.evidence_memory_id, "
+             "       EXTRACT(DAY FROM now() - p.proposed_at)::int AS age_days "
+             "  FROM mem.proposed_relationships p "
+             "  JOIN mem.entities s ON s.id = p.source_id "
+             "  JOIN mem.entities t ON t.id = p.target_id "
+             "  LEFT JOIN mem.memories m ON m.id = p.evidence_memory_id "
+             " WHERE p.tenant_id = :t AND p.project_id = :p "
+             "   AND p.decision IS NULL "
+             " ORDER BY p.confidence DESC, p.proposed_at "
+             " LIMIT :k"),
+        {"t": str(tenant_id), "p": str(project_id), "k": limit},
+    ).mappings().all()
+    for e in edges:
+        items.append({
+            "ref": str(e["id"]), "kind": "proposed_edge",
+            # Rendered as the claim itself. A reviewer deciding on an edge needs
+            # to read the assertion, not look up two entity ids.
+            "title": f"{e['source_name']} —{e['relation']}→ {e['target_name']}",
+            "digest": (f"evidence: {e['evidence_title']}"
+                       if e["evidence_title"] else "no evidence memory recorded"),
+            "type": e["relation"], "tier": None,
+            "source": f"{e['source_kind']} → {e['target_kind']}",
+            "source_uri": None, "age_days": e["age_days"],
+            "why": [f"confidence {e['confidence']:.2f}"],
+            "recorded_at": None,
+            "edge": {
+                "source": e["source_name"], "target": e["target_name"],
+                "relation": e["relation"], "confidence": round(e["confidence"], 3),
+                "evidence_memory_id": (str(e["evidence_memory_id"])
+                                       if e["evidence_memory_id"] else None),
+            },
         })
 
     items.sort(key=lambda i: (PRIORITY.get(i["kind"], 9), -(i["age_days"] or 0)))
@@ -173,6 +221,74 @@ def reject(conn: Connection, *, tenant_id: UUID, memory_id: UUID,
 
     _audit(conn, tenant_id, reviewer, "reject", memory_id, {"reason": reason[:500]})
     return dict(row) | {"id": str(row["id"])}
+
+
+def accept_edge(conn: Connection, *, tenant_id: UUID, proposal_id: UUID,
+                reviewer: UUID) -> dict[str, Any]:
+    """Promote a proposed graph edge into `mem.relationships`.
+
+    The accepted edge lands at `observed`, never higher. §444 restricts real
+    edges to tier >= 2, and a human confirming a machine's guess is exactly
+    `observed` — it is not `authoritative`, because authoritative means written
+    in git and reviewed as a diff (ADR-0002). An edge a reviewer can mint at the
+    top tier from a button would make the same hole the memory path closes.
+    """
+    p = conn.execute(
+        text("SELECT source_id, target_id, relation::text AS relation, "
+             "       evidence_memory_id "
+             "  FROM mem.proposed_relationships "
+             " WHERE id = :i AND tenant_id = :t AND decision IS NULL"),
+        {"i": str(proposal_id), "t": str(tenant_id)}).mappings().one_or_none()
+    if p is None:
+        raise LookupError("no pending edge proposal with that id in this scope")
+
+    conn.execute(
+        text("INSERT INTO mem.relationships "
+             "  (tenant_id, project_id, source_id, target_id, relation, tier, "
+             "   confidence, evidence_memory_id) "
+             "SELECT :t, pr.project_id, pr.source_id, pr.target_id, pr.relation, "
+             "       'observed', 0.7, pr.evidence_memory_id "
+             "  FROM mem.proposed_relationships pr WHERE pr.id = :i "
+             "ON CONFLICT DO NOTHING"),
+        {"t": str(tenant_id), "i": str(proposal_id)})
+
+    conn.execute(
+        text("UPDATE mem.proposed_relationships "
+             "   SET decision = 'accepted', reviewed_by = :by, reviewed_at = now() "
+             " WHERE id = :i AND tenant_id = :t"),
+        {"i": str(proposal_id), "t": str(tenant_id), "by": str(reviewer)})
+
+    _audit(conn, tenant_id, reviewer, "accept_edge", proposal_id,
+           {"relation": p["relation"], "source": str(p["source_id"]),
+            "target": str(p["target_id"])})
+    log.info("accepted edge %s (%s)", proposal_id, p["relation"])
+    return {"id": str(proposal_id), "decision": "accepted",
+            "relation": p["relation"]}
+
+
+def reject_edge(conn: Connection, *, tenant_id: UUID, proposal_id: UUID,
+                reviewer: UUID, reason: str = "") -> dict[str, Any]:
+    """Reject a proposed edge. Recorded, never deleted.
+
+    The record is what stops the next extraction pass re-proposing the same edge
+    and the reviewer deciding it again — an inbox that re-asks answered questions
+    is how curation capacity gets spent on nothing.
+    """
+    row = conn.execute(
+        text("UPDATE mem.proposed_relationships "
+             "   SET decision = 'rejected', reviewed_by = :by, "
+             "       reviewed_at = now(), review_reason = :r "
+             " WHERE id = :i AND tenant_id = :t AND decision IS NULL "
+             "RETURNING id, relation::text AS relation"),
+        {"i": str(proposal_id), "t": str(tenant_id), "by": str(reviewer),
+         "r": reason[:500]}).mappings().one_or_none()
+    if row is None:
+        raise LookupError("no pending edge proposal with that id in this scope")
+
+    _audit(conn, tenant_id, reviewer, "reject_edge", proposal_id,
+           {"reason": reason[:500], "relation": row["relation"]})
+    return {"id": str(row["id"]), "decision": "rejected",
+            "relation": row["relation"]}
 
 
 def unreview(conn: Connection, *, tenant_id: UUID, memory_id: UUID,

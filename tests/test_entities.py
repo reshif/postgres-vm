@@ -217,6 +217,181 @@ def main() -> None:
     check("and creates no real edge (§444: edges from tier >= 2 only)",
           n_bad == 0, str(n_bad))
 
+    # ---- authored domain knowledge: glossary -> graph ---------------------
+    #
+    # `.memory/glossary.md` was ingested at authoritative tier and described in
+    # ingest.py as "entities and their canonical names" — while feeding only
+    # searchable TEXT. `Context pack` and `Trust lattice` were defined there and
+    # were not graph nodes. This is the bridge, and these tests are what stop it
+    # silently reverting to a text-only path.
+    print("\n10. Authored glossary terms become graph entities")
+
+    GLOSSARY = (
+        "# Glossary\n\n"
+        f"**Widget cache {RUN}** — a cache of widgets. Used by the widget service.\n\n"
+        f"**Thing ledger {RUN}** — the authoritative record of things.\n\n"
+        "Some prose that defines nothing and must not become an entity.\n"
+    )
+
+    parsed = entities.parse_glossary(GLOSSARY, {})
+    # NOT `names` — that is the module-level helper this file uses in section 1,
+    # and shadowing it makes the whole function fail on an earlier line.
+    term_names = {p["name"] for p in parsed}
+    check("bold-term definitions are parsed", len(parsed) == 2, str(sorted(term_names)))
+    check("prose that defines nothing is not an entity",
+          not any("must not become" in p["name"] for p in parsed))
+    check("the default kind is `concept`, not a technology",
+          all(p["kind"] == "concept" for p in parsed),
+          str({p["kind"] for p in parsed}))
+    check("the definition is captured with the term",
+          any("cache of widgets" in p["definition"] for p in parsed))
+
+    # Frontmatter is the more deliberate statement and wins.
+    meta = {"entities": [{"name": f"Widget cache {RUN}", "kind": "technology",
+                          "aliases": ["widgetcache"]}]}
+    over = {p["name"]: p for p in entities.parse_glossary(GLOSSARY, meta)}
+    check("frontmatter overrides the parsed kind",
+          over[f"Widget cache {RUN}"]["kind"] == "technology")
+    check("frontmatter supplies aliases prose cannot",
+          "widgetcache" in over[f"Widget cache {RUN}"]["aliases"])
+
+    with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
+        report = entities.upsert_glossary_entities(
+            c, tenant_id=TENANT, project_id=PROJECT, body=GLOSSARY,
+            metadata=meta, source_version="abc123")
+        rows = c.execute(text(
+            "SELECT canonical_name, kind, tier::text AS tier, attributes "
+            "  FROM mem.entities "
+            " WHERE tenant_id = :t AND project_id = :p "
+            "   AND attributes ->> 'source' = 'glossary' "
+            "   AND canonical_name LIKE :like"),
+            {"t": str(TENANT), "p": str(PROJECT), "like": f"%{RUN}"}).mappings().all()
+    check("glossary terms are written as entities", report["entities"] == 2,
+          str(report))
+    by_name = {r["canonical_name"]: r for r in rows}
+    check("both terms exist in the graph", len(by_name) == 2, str(list(by_name)))
+
+    # Authoritative BY CONSTRUCTION: authored in git, reviewed in a diff,
+    # ingested with a commit sha. No proposal queue, because ADR-0002 already
+    # counts that as review.
+    check("authored entities are authoritative, not proposed",
+          all(r["tier"] == "authoritative" for r in rows),
+          str({r["tier"] for r in rows}))
+    check("provenance records the commit",
+          any((r["attributes"] or {}).get("source_version") == "abc123" for r in rows))
+
+    # The point of the whole exercise: the terms must now MATCH in text.
+    with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
+        entities.load_authored(c, tenant_id=TENANT, project_id=PROJECT, refresh=True)
+    sentence = f"The Widget cache {RUN} writes into the Thing ledger {RUN} nightly."
+    plain = {n for n, _, _ in entities.extract(sentence)}
+    scoped = {n for n, _, _ in entities.extract(
+        sentence, scope=(str(TENANT), str(PROJECT)))}
+    check("authored terms are invisible without scope", not (plain & term_names),
+          str(sorted(plain)))
+    check("authored terms match once the scope is supplied",
+          term_names <= scoped, str(sorted(scoped)))
+
+    # Re-ingesting an unchanged glossary must not multiply rows: ingestion polls.
+    with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
+        entities.upsert_glossary_entities(
+            c, tenant_id=TENANT, project_id=PROJECT, body=GLOSSARY,
+            metadata=meta, source_version="abc123")
+        again = c.execute(text(
+            "SELECT count(*) FROM mem.entities "
+            " WHERE tenant_id = :t AND project_id = :p "
+            "   AND canonical_name LIKE :like"),
+            {"t": str(TENANT), "p": str(PROJECT), "like": f"%{RUN}"}).scalar_one()
+    check("re-ingesting is idempotent", again == 2, f"{again} rows")
+
+    # ---- self-edges ------------------------------------------------------
+    # `RRF uses RRF` and `RLS uses RLS` were in the accepted relationships table.
+    # A self-edge is never information, and it inflates an entity's apparent
+    # connectivity in the graph arm, which expands seed -> neighbours.
+    # ---- the ontology is 14 types; extraction produced exactly one --------
+    #
+    # Every one of 51 stored proposals was `uses`. Not because prose only
+    # expresses that relation, but because the matcher took the FIRST pattern to
+    # match and `uses` sat second with a broad alternation (`using|via|through`).
+    # "fixed by X connecting through Y" matched `uses` on "through" and stopped
+    # before reaching `solved_by`. These cases pin the ordering.
+    # ---- domain kinds, not just installed software -----------------------
+    #
+    # Every entity kind before this was something an engineer INSTALLS —
+    # technology, module, system, service. Nothing was something the business
+    # MEANS, and that gap is the measured cause of the eval's worst cases: a
+    # question in domain language cannot reach an answer in technical language
+    # because no node connects them.
+    print("\n13. Domain entity kinds")
+    KINDED = (
+        "## Concepts\n"
+        f"**Project isolation {RUN}** — one project never reads another's memories.\n"
+        "## Incidents\n"
+        f"**Pooler outage {RUN}** — the pooler refused every connection.\n"
+        "## People\n"
+        f"**Alex {RUN}** — maintainer.\n"
+        "## Environments\n"
+        f"**staging {RUN}** — the pre-production deployment.\n"
+        "## Some unknown heading\n"
+        f"**Loose term {RUN}** — no matching kind.\n"
+    )
+    kinds = {t["name"].split()[0]: t["kind"] for t in entities.parse_glossary(KINDED, {})}
+    check("a `Concepts` heading yields `concept`", kinds.get("Project") == "concept",
+          str(kinds))
+    check("an `Incidents` heading yields `incident`", kinds.get("Pooler") == "incident")
+    # "people" is not "persons"; the mapping is explicit rather than derived.
+    check("a `People` heading yields `person` (irregular plural)",
+          kinds.get("Alex") == "person", str(kinds.get("Alex")))
+    check("an `Environments` heading yields `environment`",
+          kinds.get("staging") == "environment")
+    check("an unknown heading falls back rather than inventing a kind",
+          kinds.get("Loose") == entities.DEFAULT_GLOSSARY_KIND, str(kinds.get("Loose")))
+    check("the causal/ownership kinds exist",
+          {"incident", "person", "environment", "requirement"} <= set(entities.ENTITY_KINDS))
+
+    print("\n12. Relations other than `uses` are reachable")
+
+    def rel(sentence):
+        return {r for _, r, _ in entities.extract_relations(sentence)}
+
+    check("contradicts", "contradicts" in rel(
+        "We chose PostgreSQL instead of Redis for the cache."))
+    check("depends_on", "depends_on" in rel(
+        "PgBouncer depends on PostgreSQL for authentication."))
+    check("mitigates", "mitigates" in rel(
+        "RLS mitigates cross-tenant leakage in PostgreSQL."))
+    check("supersedes", "supersedes" in rel(
+        "PostgreSQL supersedes Redis as the queue backend."))
+    check("documented_in", "documented_in" in rel(
+        "The api is documented in the runbook alongside PostgreSQL."))
+    check("uses still works as the catch-all", "uses" in rel(
+        "The worker reaches PostgreSQL via PgBouncer."))
+
+    # The specific relation must win over the broad one in the same clause.
+    both = rel("PgBouncer depends on PostgreSQL running through Docker.")
+    check("a specific relation pre-empts `uses` in the same clause",
+          "depends_on" in both and "uses" not in both, str(both))
+
+    check("`uses` is ordered last so it cannot pre-empt anything",
+          entities.RELATION_PATTERNS[-1][0] == "uses",
+          entities.RELATION_PATTERNS[-1][0])
+
+    print("\n11. A self-edge can never be created")
+    with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
+        eid = c.execute(text(
+            "SELECT id FROM mem.entities WHERE tenant_id = :t AND project_id = :p "
+            " LIMIT 1"), {"t": str(TENANT), "p": str(PROJECT)}).scalar_one()
+        try:
+            c.execute(text(
+                "INSERT INTO mem.relationships "
+                "  (tenant_id, project_id, source_id, target_id, relation, tier) "
+                "VALUES (:t, :p, :e, :e, 'uses', 'observed')"),
+                {"t": str(TENANT), "p": str(PROJECT), "e": str(eid)})
+            check("the database refuses a self-edge", False, "INSERT SUCCEEDED")
+        except Exception as exc:  # noqa: BLE001
+            check("the database refuses a self-edge",
+                  "no_self_edge" in str(exc), type(exc).__name__)
+
     failed = [n for ok, n in results if not ok]
     print(f"\n{'='*62}\n{len(results)-len(failed)}/{len(results)} passed")
     if failed:

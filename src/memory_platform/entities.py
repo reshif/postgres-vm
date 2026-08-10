@@ -21,6 +21,7 @@ the project.
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, Iterable
@@ -97,8 +98,76 @@ _COMPILED = {
     for canon, (kind, aliases) in DICTIONARY.items()
 }
 
+# ---------------------------------------------------------------------------
+# AUTHORED ENTITIES, loaded from the database rather than hard-coded here.
+#
+# The dictionary above is deliberately hand-maintained and high-precision, but it
+# cannot grow: a term is invisible to the graph until an engineer edits this file
+# and redeploys. Meanwhile `.memory/glossary.md` is already ingested at
+# `authoritative` tier and ingest.py describes it as "entities and their
+# canonical names" — it was feeding searchable TEXT and nothing else. `Context
+# pack`, `Trust tier` and `Digest` were defined there and were not graph nodes.
+#
+# This is the bridge. Terms authored in the glossary become entities through the
+# path the two-plane model already sanctions: written in git, reviewed in a diff,
+# ingested with a commit sha. No LLM, no proposal queue — an authored definition
+# is authoritative by construction (ADR-0002).
+#
+# Cached per (tenant, project) because extract() is called once per memory on the
+# ingest path and recompiling a regex set per call would make a tree walk
+# quadratic in glossary size.
+_AUTHORED: dict[tuple[str, str], dict[str, tuple[str, list[re.Pattern[str]]]]] = {}
 
-def extract(*texts: str) -> list[tuple[str, str, float]]:
+
+def load_authored(conn: Connection, *, tenant_id: UUID, project_id: UUID,
+                  refresh: bool = False) -> int:
+    """Compile authored entities from mem.entities into the matcher.
+
+    Returns how many were loaded. Safe to call on every ingest pass; the compiled
+    form is cached until `refresh=True`, which the glossary writer passes after it
+    has upserted new terms.
+    """
+    key = (str(tenant_id), str(project_id))
+    if not refresh and key in _AUTHORED:
+        return len(_AUTHORED[key])
+
+    rows = conn.execute(
+        text("SELECT e.canonical_name, e.kind, "
+             "       COALESCE(array_agg(a.alias) FILTER (WHERE a.alias IS NOT NULL), "
+             "                '{}') AS aliases "
+             "  FROM mem.entities e "
+             "  LEFT JOIN mem.entity_aliases a ON a.entity_id = e.id "
+             " WHERE e.tenant_id = :t AND e.project_id = :p "
+             "   AND e.attributes ->> 'source' = 'glossary' "
+             " GROUP BY e.canonical_name, e.kind"),
+        {"t": str(tenant_id), "p": str(project_id)},
+    ).mappings().all()
+
+    compiled: dict[str, tuple[str, list[re.Pattern[str]]]] = {}
+    for r in rows:
+        # The canonical name is itself a matchable alias; an author who writes
+        # "**Context pack** — ..." expects the phrase "context pack" to match.
+        names = {r["canonical_name"], *(r["aliases"] or [])}
+        compiled[r["canonical_name"]] = (
+            r["kind"], [_alias_regex(a) for a in names if a])
+    _AUTHORED[key] = compiled
+    return len(compiled)
+
+
+def _matchers(scope: tuple[str, str] | None):
+    """The hard-coded dictionary plus any authored entities for this scope.
+
+    The dictionary wins on a name collision: it carries curated aliases like
+    `pg` for PostgreSQL that a prose glossary will not, and silently replacing
+    them with a looser authored entry would lower precision without anyone
+    noticing.
+    """
+    if scope is None or scope not in _AUTHORED:
+        return _COMPILED
+    return {**_AUTHORED[scope], **_COMPILED}
+
+
+def extract(*texts: str, scope: tuple[str, str] | None = None) -> list[tuple[str, str, float]]:
     """Return (canonical_name, kind, weight) for entities present in the text.
 
     Weight is mention frequency normalised into 0..1 and is what the graph arm
@@ -110,7 +179,7 @@ def extract(*texts: str) -> list[tuple[str, str, float]]:
         return []
 
     counts: dict[tuple[str, str], int] = {}
-    for canon, (kind, patterns) in _COMPILED.items():
+    for canon, (kind, patterns) in _matchers(scope).items():
         n = sum(len(p.findall(blob)) for p in patterns)
         if n:
             counts[(canon, kind)] = n
@@ -129,6 +198,202 @@ def extract(*texts: str) -> list[tuple[str, str, float]]:
     return out[:MAX_ENTITIES_PER_MEMORY]
 
 
+# `**Term** — definition`, which is the convention `.memory/glossary.md` already
+# uses. Parsing what authors already write means the glossary becomes a graph
+# source with no change to how anyone writes it — and a format nobody has to
+# learn is a format that stays accurate.
+_GLOSSARY_TERM = re.compile(
+    r"^\*\*(?P<name>[^*\n]{2,60})\*\*\s*(?:—|--|-|:)\s*(?P<definition>.+)$",
+    re.M,
+)
+
+# Domain vocabulary, not installed software. `concept` is the kind that fixes the
+# eval's worst failures — questions asked in plain language ("what stops project
+# B reading project A's decisions?") against answers written in technical
+# language. The concept is the bridge between the two.
+DEFAULT_GLOSSARY_KIND = "concept"
+
+# Entity kinds this system understands.
+#
+# `mem.entities.kind` is a text column, not an enum, so this list is advisory
+# rather than enforced — deliberately, because a domain adds nouns faster than a
+# migration can be written, and an unknown kind should degrade to "unclassified"
+# rather than reject the write.
+#
+# Everything present before this list was something an engineer INSTALLS
+# (technology, module, system, service). Nothing was something the business
+# MEANS. That gap is the measured cause of the eval's worst cases: a question
+# phrased in domain language cannot reach an answer written in technical
+# language, because no node connects them.
+ENTITY_KINDS: dict[str, str] = {
+    # Technical — what was already here.
+    "technology":  "Installed or depended-upon software",
+    "module":      "A component inside this codebase",
+    "system":      "A named subsystem or protocol",
+    "service":     "A deployable process",
+
+    # Domain — the vocabulary bridge.
+    "concept":     "A domain idea the team names: project isolation, bi-temporality",
+    "incident":    "A named failure. The subject of caused_by / solved_by, and "
+                   "what capability C2 (recurrence) is asked about",
+    "person":      "A human. 'Who decided this' is the most common follow-up to "
+                   "any decision, and today it is unanswerable",
+    "team":        "A group that owns something",
+    "environment": "staging, production. Knowledge true in one place and not another",
+    "requirement": "A rule or policy a constraint traces back to",
+}
+
+
+# Headings authors actually write, mapped to kinds. English plurals do not
+# reduce mechanically — "people" is not "persons" and stripping an "s" from
+# "technologies" gives "technologie" — so the natural forms are listed rather
+# than derived. An unrecognised heading is not an error; it leaves the kind at
+# the default, because a glossary should not fail to ingest over a section title.
+_HEADING_KIND: dict[str, str] = {
+    "concept": "concept", "concepts": "concept",
+    "incident": "incident", "incidents": "incident",
+    "failure": "incident", "failures": "incident", "outages": "incident",
+    "person": "person", "people": "person", "persons": "person",
+    "team": "team", "teams": "team",
+    "environment": "environment", "environments": "environment",
+    "requirement": "requirement", "requirements": "requirement",
+    "policy": "requirement", "policies": "requirement",
+    "technology": "technology", "technologies": "technology",
+    "module": "module", "modules": "module",
+    "system": "system", "systems": "system",
+    "service": "service", "services": "service",
+}
+
+
+def _kind_for_heading(heading: str) -> str:
+    return _HEADING_KIND.get(heading.strip().lower(), DEFAULT_GLOSSARY_KIND)
+
+
+def parse_glossary(body: str, meta: dict | None = None) -> list[dict[str, Any]]:
+    """Entities defined in a glossary document.
+
+    Two sources, in increasing order of precision:
+
+      * the `**Term** — definition` prose convention, which needs no authoring
+        change and covers the whole existing file;
+      * an optional `entities:` frontmatter block, for terms that need a specific
+        kind or aliases prose cannot express:
+
+            entities:
+              - name: RRF
+                kind: technology
+                aliases: [reciprocal rank fusion]
+
+    Frontmatter wins where both describe the same term, because it is the more
+    deliberate statement.
+    """
+    found: dict[str, dict[str, Any]] = {}
+
+    # A markdown heading sets the kind for the terms beneath it:
+    #
+    #     ## Incidents
+    #     **PgBouncer auth outage** — the pooler refused every connection ...
+    #
+    # Grouping by heading is how people already write glossaries, so a kind can
+    # be declared without frontmatter and without learning a syntax. Singular or
+    # plural, case-insensitive; an unrecognised heading simply leaves the kind at
+    # the default rather than inventing one.
+    section_kind = DEFAULT_GLOSSARY_KIND
+    for line in (body or "").splitlines():
+        heading = re.match(r"^#{1,6}\s+(?P<h>.+?)\s*$", line)
+        if heading:
+            section_kind = _kind_for_heading(heading.group("h"))
+            continue
+
+        m = _GLOSSARY_TERM.match(line)
+        if not m:
+            continue
+        name = m.group("name").strip()
+        if not name:
+            continue
+        found[name] = {
+            "name": name,
+            "kind": section_kind,
+            "aliases": [],
+            "definition": m.group("definition").strip()[:500],
+        }
+
+    for item in (meta or {}).get("entities") or []:
+        if isinstance(item, str):
+            item = {"name": item}
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        existing = found.get(name, {})
+        aliases = item.get("aliases") or []
+        if isinstance(aliases, str):
+            aliases = [aliases]
+        found[name] = {
+            "name": name,
+            "kind": str(item.get("kind") or existing.get("kind")
+                        or DEFAULT_GLOSSARY_KIND),
+            "aliases": [str(a).strip() for a in aliases if str(a).strip()],
+            "definition": str(item.get("definition")
+                              or existing.get("definition") or "")[:500],
+        }
+
+    return list(found.values())
+
+
+def upsert_glossary_entities(
+    conn: Connection, *, tenant_id: UUID, project_id: UUID,
+    body: str, metadata: dict | None = None, source_version: str | None = None,
+) -> dict[str, int]:
+    """Turn a glossary document into graph entities.
+
+    Written at `authoritative` tier, and that is the point: these came through
+    Plane A — authored in the repository, reviewed in a diff, ingested with a
+    commit sha (ADR-0002). They do not pass through the proposal queue, because
+    a human already reviewed them in the only place this system counts as review.
+
+    Idempotent. Re-ingesting an unchanged glossary changes nothing; renaming a
+    term adds the new one and leaves the old, which is deliberate — silently
+    deleting an entity would orphan every mention and edge that referenced it.
+    """
+    terms = parse_glossary(body, metadata)
+    if not terms:
+        return {"entities": 0, "aliases": 0}
+
+    entities = aliases = 0
+    for t in terms:
+        eid = conn.execute(
+            text("INSERT INTO mem.entities "
+                 "  (tenant_id, project_id, kind, canonical_name, tier, attributes) "
+                 "VALUES (:t, :p, :k, :n, 'authoritative', CAST(:a AS jsonb)) "
+                 "ON CONFLICT (tenant_id, project_id, kind, canonical_name) "
+                 "DO UPDATE SET attributes = mem.entities.attributes || EXCLUDED.attributes, "
+                 "              tier = 'authoritative' "
+                 "RETURNING id"),
+            {"t": str(tenant_id), "p": str(project_id), "k": t["kind"],
+             "n": t["name"],
+             "a": json.dumps({"source": "glossary",
+                              "definition": t["definition"],
+                              "source_version": source_version})},
+        ).scalar_one()
+        entities += 1
+
+        for alias in t["aliases"]:
+            conn.execute(
+                text("INSERT INTO mem.entity_aliases (entity_id, tenant_id, alias) "
+                     "VALUES (:e, :t, :a) ON CONFLICT DO NOTHING"),
+                {"e": str(eid), "t": str(tenant_id), "a": alias})
+            aliases += 1
+
+    # The matcher is cached; without this the terms just written stay invisible
+    # until the next process restart, which is exactly the kind of "works after a
+    # redeploy" behaviour that wastes an afternoon.
+    load_authored(conn, tenant_id=tenant_id, project_id=project_id, refresh=True)
+    log.info("glossary: %d entities, %d aliases", entities, aliases)
+    return {"entities": entities, "aliases": aliases}
+
+
 def link_memory(
     conn: Connection,
     *,
@@ -144,7 +409,8 @@ def link_memory(
     because entities are unique on (tenant, project, kind, canonical_name) and
     mentions on (memory, entity).
     """
-    found = extract(title, content)
+    found = extract(title, content,
+                    scope=(str(tenant_id), str(project_id)))
     if not found:
         return []
 
@@ -195,7 +461,8 @@ def resolve_query_entities(
     rules than the corpus was indexed with is how a graph arm ends up looking
     broken when it is merely misaligned.
     """
-    names = [n for n, _, _ in extract(query)]
+    names = [n for n, _, _ in extract(
+        query, scope=(str(tenant_id), str(project_id)))]
     if not names:
         return []
     rows = conn.execute(
@@ -264,16 +531,53 @@ def backfill(conn: Connection, *, tenant_id: UUID, project_id: UUID) -> dict[str
 # Surface patterns -> relation type. Deliberately narrow: an edge asserted
 # between the wrong two entities is worse than a missing edge, because the graph
 # arm then pulls unrelated memories together on every query that touches either.
+# ORDER IS SIGNIFICANT — most specific first, `uses` last.
+#
+# Every one of the 51 edge proposals in the database was `uses`, and it was not
+# because prose only expresses that relation. The matcher takes the FIRST
+# pattern that matches a clause, and `uses` was second in the list with a very
+# broad alternation (`using|via|through`). So:
+#
+#   "The queue failure was fixed by Procrastinate connecting through PostgreSQL"
+#
+# matched `uses` on "through" and stopped, never reaching `solved_by`. Thirteen
+# of fourteen relation types were unreachable in practice for any sentence that
+# happened to contain a common preposition.
+#
+# `uses` is the catch-all and now sorts last. The relations that carry reasoning
+# value — why something broke, what fixed it, what it argues against — get first
+# refusal on the clause.
 RELATION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    # Causal and evidential: capability C2 (recurrence) is built on these.
+    ("caused_by", re.compile(
+        r"\b(caused by|due to|because of|triggered by|as a result of|"
+        r"stems from|comes from)\b", re.I)),
+    ("solved_by", re.compile(
+        r"\b(fixed by|solved by|resolved by|mitigated by|worked around by|"
+        r"addressed by|corrected by)\b", re.I)),
+    ("mitigates", re.compile(
+        r"\b(mitigates|guards against|protects against|prevents|defends against)\b", re.I)),
+    ("contradicts", re.compile(
+        r"\b(contradicts|conflicts with|instead of|rather than|"
+        r"incompatible with|in place of|as opposed to)\b", re.I)),
+    ("supersedes", re.compile(
+        r"\b(supersedes|replaces|replaced by|deprecates|obsoletes)\b", re.I)),
+    ("supports", re.compile(
+        r"\b(supports|corroborates|confirms|backs up|is evidence for)\b", re.I)),
+
+    # Structural.
     ("depends_on", re.compile(
         r"\b(depends on|requires|needs|relies on|is backed by|fronted by)\b", re.I)),
+    ("part_of", re.compile(r"\b(part of|belongs to|lives in|inside|contained in)\b", re.I)),
+    ("implements", re.compile(r"\b(implements|provides|serves|exposes|satisfies)\b", re.I)),
+    ("deployed_to", re.compile(r"\b(deployed to|runs in|hosted on|deployed on)\b", re.I)),
+    ("produces", re.compile(r"\b(produces|emits|writes|generates|outputs)\b", re.I)),
+    ("documented_in", re.compile(r"\b(documented in|described in|specified in|recorded in)\b", re.I)),
+    ("owns", re.compile(r"\b(owns|owned by|maintained by|responsible for)\b", re.I)),
+
+    # LAST. The broadest alternation, and the least informative relation — it
+    # must never pre-empt a more specific one.
     ("uses", re.compile(r"\b(uses|using|via|through|built on|runs on)\b", re.I)),
-    ("part_of", re.compile(r"\b(part of|belongs to|lives in|inside)\b", re.I)),
-    ("implements", re.compile(r"\b(implements|provides|serves|exposes)\b", re.I)),
-    ("caused_by", re.compile(r"\b(caused by|due to|because of|triggered by)\b", re.I)),
-    ("solved_by", re.compile(r"\b(fixed by|solved by|resolved by|mitigated by)\b", re.I)),
-    ("contradicts", re.compile(r"\b(contradicts|conflicts with|instead of|rather than)\b", re.I)),
-    ("deployed_to", re.compile(r"\b(deployed to|runs in|hosted on)\b", re.I)),
 ]
 
 # Sources trusted enough to assert an edge rather than propose one (§444).
@@ -309,7 +613,14 @@ def extract_relations(text_: str) -> list[tuple[str, str, str]]:
             right = _nearest(clause[m.end():], names, from_end=False)
             if left and right and left != right:
                 out.append((left, rel, right))
-            break
+                break
+            # Matched the phrase but could not resolve an entity either side —
+            # usually because the subject is not in the dictionary ("the outage
+            # was caused by PgBouncer"). Keep trying the remaining patterns
+            # instead of giving up on the clause: breaking here was half of why
+            # only one relation type ever appeared, since a failed specific
+            # match consumed the clause and blocked the general one behind it.
+            continue
     return out
 
 
@@ -384,10 +695,21 @@ def link_relations(
     rels = extract_relations(f"{title}. {content}")
 
     # Declared: the document's most-weighted entity is the subject.
-    own = [n for n, _, _ in extract(title, content)]
+    #
+    # `own[0]` is a guess at what the document is ABOUT, and when the guess lands
+    # on the same entity the author named as the target you get a self-loop. That
+    # is how `RRF uses RRF` and `RLS uses RLS` reached the accepted relationships
+    # table: ADRs that discuss one technology and declare a relation to it.
+    #
+    # A self-edge is never information. It also pollutes the graph arm, which
+    # expands from a seed entity to its neighbours — a loop makes an entity its
+    # own neighbour and inflates its apparent connectivity.
+    own = [n for n, _, _ in extract(
+        title, content, scope=(str(tenant_id), str(project_id)))]
     if own:
         for rel, target in declared_relations(metadata or {}):
-            rels.append((own[0], rel, target))
+            if own[0] != target:
+                rels.append((own[0], rel, target))
     if not rels:
         return {"edges": 0, "proposed": 0}
 
@@ -403,6 +725,12 @@ def link_relations(
         ).mappings().all()
         by_name = {r["canonical_name"]: r["id"] for r in ids}
         if src not in by_name or dst not in by_name:
+            continue
+        # Belt and braces. The declared path is guarded above, but this is the
+        # single point every edge passes through, and the database constraint
+        # added in migration 0017 would otherwise turn a future extraction bug
+        # into a failed write on the ingest path rather than a skipped edge.
+        if by_name[src] == by_name[dst]:
             continue
         conn.execute(
             text(f"INSERT INTO mem.{table} "

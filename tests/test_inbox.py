@@ -239,6 +239,121 @@ def main() -> None:
         check("it leaves the queue",
               conf[0]["ref"] not in [i["ref"] for i in q3["items"]])
 
+    # ---- 9. proposed graph edges reach a reviewer -------------------------
+    #
+    # entities.link_relations had been writing edge proposals since the graph arm
+    # was built, and inbox.py never read the table. 51 accumulated, invisible to
+    # the one screen whose job is to show what is waiting. The blueprint's
+    # "inferred edges land in the inbox" was implemented on the producing side
+    # only, which is indistinguishable from working right up until someone looks.
+    print("\n9. Proposed graph edges are reviewable")
+    from memory_platform import entities  # noqa: E402
+
+    with db.scoped(TENANT, REVIEWER, PROJECT) as c:
+        ids = {}
+        for name in (f"Alpha{RUN}", f"Beta{RUN}"):
+            ids[name] = c.execute(text(
+                "INSERT INTO mem.entities (tenant_id, project_id, kind, canonical_name) "
+                "VALUES (:t, :p, 'technology', :n) "
+                "ON CONFLICT (tenant_id, project_id, kind, canonical_name) "
+                "DO UPDATE SET canonical_name = EXCLUDED.canonical_name RETURNING id"),
+                {"t": str(TENANT), "p": str(PROJECT), "n": name}).scalar_one()
+        pid = c.execute(text(
+            "INSERT INTO mem.proposed_relationships "
+            "  (tenant_id, project_id, source_id, target_id, relation, tier, confidence) "
+            "VALUES (:t, :p, :s, :d, 'uses', 'inferred', 0.4) RETURNING id"),
+            {"t": str(TENANT), "p": str(PROJECT),
+             "s": str(ids[f"Alpha{RUN}"]), "d": str(ids[f"Beta{RUN}"])}).scalar_one()
+
+        q = inbox.list_items(c, tenant_id=TENANT, project_id=PROJECT, limit=100)
+    edges = [i for i in q["items"] if i["kind"] == "proposed_edge"]
+    mine = [i for i in edges if i["ref"] == str(pid)]
+    check("a proposed edge appears in the inbox", len(mine) == 1, f"{len(edges)} edges")
+    if mine:
+        item = mine[0]
+        # A reviewer decides on the CLAIM, not on two entity ids.
+        check("it is rendered as the assertion itself",
+              f"Alpha{RUN}" in item["title"] and f"Beta{RUN}" in item["title"],
+              item["title"][:52])
+        check("the relation is shown", "uses" in item["title"], item["title"][:40])
+        check("confidence is surfaced", "0.4" in str(item["why"]), str(item["why"]))
+        check("the machine-readable edge travels with it",
+              item.get("edge", {}).get("relation") == "uses", str(item.get("edge"))[:60])
+
+    # Ranked BELOW ordinary agent content: a wrong edge degrades ranking, a wrong
+    # memory tells an agent something false.
+    kinds = [i["kind"] for i in q["items"]]
+    if "inferred" in kinds and "proposed_edge" in kinds:
+        check("edges rank below unreviewed memories",
+              kinds.index("inferred") < kinds.index("proposed_edge"),
+              str(kinds[:6]))
+
+    # ---- accepting promotes it into the real graph ------------------------
+    with db.scoped(TENANT, REVIEWER, PROJECT) as c:
+        before = c.execute(text(
+            "SELECT count(*) FROM mem.relationships WHERE tenant_id = :t "
+            "  AND source_id = :s"), {"t": str(TENANT), "s": str(ids[f"Alpha{RUN}"])}
+        ).scalar_one()
+        res = inbox.accept_edge(c, tenant_id=TENANT, proposal_id=pid, reviewer=REVIEWER)
+        after = c.execute(text(
+            "SELECT count(*) FROM mem.relationships WHERE tenant_id = :t "
+            "  AND source_id = :s"), {"t": str(TENANT), "s": str(ids[f"Alpha{RUN}"])}
+        ).scalar_one()
+        tier = c.execute(text(
+            "SELECT tier::text FROM mem.relationships WHERE tenant_id = :t "
+            "  AND source_id = :s LIMIT 1"),
+            {"t": str(TENANT), "s": str(ids[f"Alpha{RUN}"])}).scalar_one()
+    check("accepting creates a real edge", after == before + 1, f"{before} -> {after}")
+    check("the accepted edge is `observed`, never authoritative", tier == "observed",
+          tier)
+    check("the decision is reported", res["decision"] == "accepted", str(res))
+
+    with db.scoped(TENANT, REVIEWER, PROJECT) as c:
+        q2 = inbox.list_items(c, tenant_id=TENANT, project_id=PROJECT, limit=100)
+    check("a reviewed edge leaves the queue",
+          str(pid) not in [i["ref"] for i in q2["items"]])
+
+    with db.scoped(TENANT, REVIEWER, PROJECT) as c:
+        try:
+            inbox.accept_edge(c, tenant_id=TENANT, proposal_id=pid, reviewer=REVIEWER)
+            check("accepting twice is refused", False, "ALLOWED")
+        except LookupError:
+            check("accepting twice is refused", True)
+
+    # ---- rejecting is durable --------------------------------------------
+    # Without a recorded decision the next extraction pass re-proposes the same
+    # edge and the reviewer decides it again. An inbox that re-asks answered
+    # questions spends the one resource ADR-0015 says is scarce.
+    with db.scoped(TENANT, REVIEWER, PROJECT) as c:
+        pid2 = c.execute(text(
+            "INSERT INTO mem.proposed_relationships "
+            "  (tenant_id, project_id, source_id, target_id, relation, tier, confidence) "
+            "VALUES (:t, :p, :s, :d, 'depends_on', 'inferred', 0.4) RETURNING id"),
+            {"t": str(TENANT), "p": str(PROJECT),
+             "s": str(ids[f"Beta{RUN}"]), "d": str(ids[f"Alpha{RUN}"])}).scalar_one()
+        rej = inbox.reject_edge(c, tenant_id=TENANT, proposal_id=pid2,
+                                reviewer=REVIEWER, reason="coincidental co-mention")
+        row = c.execute(text(
+            "SELECT decision, review_reason, reviewed_by IS NOT NULL AS has_reviewer "
+            "  FROM mem.proposed_relationships WHERE id = :i"),
+            {"i": str(pid2)}).mappings().one()
+        n_edges = c.execute(text(
+            "SELECT count(*) FROM mem.relationships WHERE tenant_id = :t "
+            "  AND source_id = :s"), {"t": str(TENANT), "s": str(ids[f"Beta{RUN}"])}
+        ).scalar_one()
+    check("rejecting records the decision", row["decision"] == "rejected", str(rej))
+    check("the reason is kept", row["review_reason"] == "coincidental co-mention")
+    check("the reviewer is recorded", row["has_reviewer"] is True)
+    check("rejecting creates no edge", n_edges == 0, f"{n_edges} edges")
+
+    with db.scoped(TENANT, REVIEWER, PROJECT) as c:
+        rows = c.execute(text(
+            "SELECT action FROM mem.audit_log WHERE tenant_id = :t "
+            "  AND action IN ('review.accept_edge','review.reject_edge')"),
+            {"t": str(TENANT)}).scalars().all()
+    check("both edge decisions are audited",
+          {"review.accept_edge", "review.reject_edge"} <= set(rows), str(set(rows)))
+
     failed = [n for ok, n in results if not ok]
     print(f"\n{'='*62}\n{len(results)-len(failed)}/{len(results)} passed")
     if failed:

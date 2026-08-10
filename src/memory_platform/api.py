@@ -44,6 +44,12 @@ Instrumentator(
 # pipeline carry data; it fails open if the collector is unreachable.
 telemetry.instrument_app(app)
 
+# Graph endpoints live in their own router module. Two agents adding endpoints to
+# one file collided repeatedly; a router means each area owns its own file and
+# this stays a single line that nobody has to edit again.
+from . import routes_graph  # noqa: E402
+app.include_router(routes_graph.router)
+
 
 _UNSCOPED_API_PATHS = {
     "/v1/console/config",  # Bootstrap may exchange an optional bearer for a scope.

@@ -534,6 +534,12 @@ def write_memory(
     # links is merely invisible to one of five arms.
     try:
         from . import entities as _entities
+
+        # Authored glossary terms must be matchable on every write, not only
+        # after a restart. The glossary UPSERT itself lives in ingest.py: it has
+        # to run even when write_memory dedupes an unchanged document.
+        _entities.load_authored(conn, tenant_id=tenant_id, project_id=project_id)
+
         _entities.link_memory(conn, tenant_id=tenant_id, project_id=project_id,
                               memory_id=mid, title=title, content=content)
         _entities.link_relations(conn, tenant_id=tenant_id, project_id=project_id,

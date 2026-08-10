@@ -45,7 +45,7 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import memories, secret_scan
+from . import entities, memories, secret_scan
 
 log = logging.getLogger("memory.ingest")
 
@@ -300,6 +300,26 @@ def ingest_tree(
             memory_key=key, source_uri=rel_str, source_version=sha,
             metadata={k: v for k, v in meta.items() if k != "title"},
         )
+        # A glossary is the project's authored vocabulary, so it becomes graph
+        # entities as well as a searchable memory.
+        #
+        # Done HERE and not inside write_memory because write_memory deduplicates
+        # on content hash and returns early for unchanged content — which is
+        # almost always, since a glossary changes rarely. Entity state and memory
+        # state are separate concerns: wiping mem.entities and re-ingesting must
+        # restore the graph, and it would not if this rode on the create path.
+        if mtype == "entity_fact":
+            try:
+                entities.upsert_glossary_entities(
+                    conn, tenant_id=tenant_id, project_id=project_id,
+                    body=content,
+                    metadata={k: v for k, v in meta.items() if k != "title"},
+                    source_version=sha)
+            except Exception as exc:  # noqa: BLE001
+                # Same contract as the rest of entity linking: enrichment must
+                # never cost the ingest of an authoritative document.
+                log.warning("glossary entity upsert failed for %s: %s", rel_str, exc)
+
         _record_event(conn, tenant_id, project_id, rel_str, sha,
                       "created" if result["created"] else "unchanged",
                       {"memory_id": str(result["id"]), "tier": result["tier"]},
