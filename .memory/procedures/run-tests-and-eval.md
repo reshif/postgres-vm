@@ -22,6 +22,12 @@ isolation is broken, every other green result is misleading.
 - `test_write_path` — tier assignment, quarantine, idempotency
 - `test_ingest` — Plane A ingestion, secret rejection, supersession
 - `test_context` — budget allocation, pack shape, retrieval event logging
+- `test_mcp` — two independent MCP sessions, quarantined agent writes, retrieval
+  event provenance, and rejection of forged foreign-scope arguments
+
+For the remaining manual Phase 4 evidence, follow
+`PROC-0005 Verify the cross-client MCP milestone` after configuring two real
+MCP clients.
 
 ## Retrieval eval (Suite 1)
 

@@ -15,7 +15,18 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-SUITES="test_rls_coverage test_isolation test_write_path test_ingest test_context test_planner test_capture test_binding test_entities test_injection test_conflicts test_inbox test_extraction test_temporal test_maintenance test_limits test_auth test_eval_snapshot test_eval_cases test_eval_export"
+# Docker Desktop may be exposed only as docker.exe inside WSL. Probe the daemon
+# rather than trusting a stub binary on PATH.
+if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
+  DOCKER=docker
+elif command -v docker.exe >/dev/null 2>&1 && docker.exe version >/dev/null 2>&1; then
+  DOCKER=docker.exe
+else
+  echo "Docker CLI is not available" >&2
+  exit 1
+fi
+
+SUITES="test_rls_coverage test_isolation test_write_path test_ingest test_context test_planner test_evidence test_hybrid_lexical test_capture test_binding test_cli test_entities test_injection test_conflicts test_inbox test_extraction test_temporal test_console_data test_evaluations test_maintenance test_limits test_auth test_mcp test_eval_snapshot test_eval_cases test_eval_export test_eval_latency_gate test_observability"
 FAILED=""
 
 # Ordered deliberately: RLS coverage runs FIRST. It is the structural check, and
@@ -24,7 +35,7 @@ FAILED=""
 # reassurance.
 for s in $SUITES; do
   printf '\n=== %s ===\n' "$s"
-  if docker compose exec -T api python - < "tests/$s.py"; then
+  if $DOCKER compose exec -T api python - < "tests/$s.py"; then
     :
   else
     FAILED="$FAILED $s"
@@ -40,7 +51,8 @@ printf 'all suites passed\n'
 
 # Clean up the fixture tenants. memory_app holds no DELETE grant by design, so
 # this is an owner-side admin operation.
-docker compose exec -T postgres psql -U memory_owner -d memory -q -c \
+$DOCKER compose exec -T postgres psql -U memory_owner -d memory -q -c \
   "DELETE FROM mem.organizations WHERE slug IN
    ('tenant-a','tenant-b','tenant-c','leak-a','leak-b','ing','ctx','cap','ent','redteam','conf','ibx','temporal','maint','llmx')
-   OR slug LIKE 'auth-%' OR slug LIKE 'console-test-%';" >/dev/null 2>&1 || true
+   OR slug LIKE 'auth-%' OR slug LIKE 'cli-%' OR slug LIKE 'console-test-%' OR slug LIKE 'console-%' OR slug LIKE 'eval-ui-%' OR slug LIKE 'mcp-%' OR slug LIKE 'hybrid-%';
+   DELETE FROM mem.memories WHERE memory_key LIKE 'mcp-cross-client:%';" >/dev/null 2>&1 || true

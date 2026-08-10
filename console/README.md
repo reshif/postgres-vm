@@ -16,32 +16,20 @@ Profile-gated, so `docker compose up` never depends on it.
 | --- | --- | --- |
 | Review Inbox | §3.1 | built — keyboard-first, ordered by consequence, undo, reject-with-reason |
 | Retrieval Debugger | §3.6 | built — plan, per-arm counts, fusion with score decomposition, dropped-with-reasons, export as eval case |
-| Memory Detail | §3.3 | built as a panel — provenance, history, supersessions |
+| Memory Detail | §3.3 | built — content, provenance links, history, relations, usage, raw record, and scoped lifecycle actions |
 | Conflicts | §3.7 | built — side-by-side with trust and dates, resolution with a reason |
 | Project Health | §3.8 | built — transparent composite, formula shipped with the score, kill-switch state |
-| Knowledge Explorer | §3.2 | not built |
-| Entity Graph | §3.4 | not built |
-| Timeline | §3.5 | not built |
-| Evals | §3.9 | not built |
+| Knowledge Explorer | §3.2 | built — virtualized table, server-side as-of filtering, URL-shaped filters, saved views, and audited archive/pin/re-embed actions |
+| Entity Graph | §3.4 | built — bounded two-hop Sigma.js view, shared time cursor, and accessible relationship table |
+| Timeline | §3.5 | built — distinct valid and record-time lanes, with the cursor shared across explorer and graph |
+| Evals | §3.9 | built — persisted run history, recall trend, and per-case evidence |
 
-The unbuilt four are the ones §2 marks as "everything else follows". The graph in
-particular is the trap the spec calls out: it demos well and the Inbox is what
-keeps the system alive.
+## Architecture
 
-## Why this is not Next.js
-
-The spec names Next.js, TanStack Table/Virtual, and Sigma.js + graphology. This
-is instead ~900 lines of dependency-free ES2020 served by nginx. That is a real
-deviation and worth being explicit about.
-
-The reasoning: everything currently built is read-mostly and low-cardinality —
-a review queue a human clears in three minutes, a debugger showing one pack. None
-of it needs virtualisation, a router, or a rendering framework, and a `node_modules`
-tree would have been the largest dependency in a project whose entire runtime is
-otherwise Postgres and Python. The screens that genuinely justify those libraries
-are the Explorer (thousands of rows, virtualised) and the Graph (WebGL over 5k
-nodes) — both unbuilt. **Build those on the specified stack when you build them.**
-Nothing here blocks it: the console talks to the same HTTP API any frontend would.
+The console uses the specified Next.js App Router stack with TanStack Query,
+Table and Virtual, Sigma.js + graphology, and visx. It is statically exported
+and nginx proxies only `/v1/` to the API, so the browser never has a database
+credential or a privileged console-only write path.
 
 What was not traded away: the design tokens, the trust ramp, keyboard-first
 triage, and the accessibility and security properties below.
@@ -50,13 +38,11 @@ triage, and the accessibility and security properties below.
 
 **Nothing from the database is ever assigned as HTML.** This console renders
 quarantined memories, and quarantined memories are exactly where prompt-injection
-payloads live — a reviewer reading the inbox is reading attacker-controlled text
-by design. Every API value goes through `el()`, which sets `textContent`. `raw()`
-exists for markup this file wrote itself and is used in three places, none of
-which touch API data. nginx additionally serves `script-src 'self'` with no
-`unsafe-eval`, so a stored-XSS bug could not fetch a remote script to escalate
-with. `tests/test_console.js` writes a live `<img onerror>` payload through the
-API and asserts nothing executes.
+payloads live. React renders API values as text and the application contains no
+`dangerouslySetInnerHTML` path. nginx additionally serves a strict script CSP,
+so a stored-XSS bug cannot fetch a remote script to escalate. The browser suite
+writes a live `<img onerror>` payload through the API and asserts nothing
+executes.
 
 **The console never touches the database** (§1 principle 2). Every write goes
 through the same API endpoints, and therefore the same RLS, policy engine and
@@ -64,17 +50,23 @@ audit trail, as an MCP write. There is no privileged path here.
 
 ## Scope and auth
 
-`GET /v1/console/config` returns the dev binding when one is set, so the console
-opens on a working screen. With no binding it asks for a tenant rather than
-guessing one — guessing means showing an operator someone else's queue. When
-OAuth lands (`MCP_OAUTH_ISSUER`), that endpoint is where the session identity
-replaces the dev binding.
+`GET /v1/console/config` returns the development binding when one is set, so
+the console opens on a working screen. Without one, development operators enter
+the tenant and project UUIDs created by `memory init`; the console never guesses
+a scope.
+
+An OAuth-enabled deployment uses a public OIDC client and authorization-code
+flow with PKCE. Set `CONSOLE_OIDC_CLIENT_ID`, register the console URL as its
+redirect URI, and configure either the issuer discovery settings or both OIDC
+endpoints. The access token lives only in tab session storage; the API verifies
+it and resolves the tenant, project, and principal from its claims. Browser
+supplied scope IDs cannot select another project.
 
 ## Tests
 
 ```sh
 docker compose --profile console up -d --build console
-sh tests/run-console.sh          # 51 assertions, real Chromium, real API
+sh tests/run-console.sh          # 33 assertions, real Chromium, real API
 ```
 
 Runs Playwright from its own image on the compose network — no browser or Node

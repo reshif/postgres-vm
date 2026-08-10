@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     rerank_enabled: bool = False
     rerank_url: str = "http://reranker:80"
     rerank_top_k: int = 40
+    # Raw cross-encoder scores corroborate direct relevance evidence, but do not
+    # stand alone. The floor is independent of profile weights, which also
+    # contain trust/recency and cannot establish answerability.
+    evidence_rerank_min_score: float = 0.05
 
     # Plane A poll ingestion. The scheduler reconciles the .memory/ tree on this
     # interval so committed knowledge reaches the platform without anyone running
@@ -55,6 +59,17 @@ class Settings(BaseSettings):
     oauth_leeway_s: int = 30
     oauth_org_claim: str = "org"
     oauth_project_claim: str = "project"
+
+    # Browser console OAuth client. This is a public SPA client: it uses
+    # authorization-code + PKCE and keeps the access token in session storage.
+    # The client id and endpoints are safe to return from /v1/console/config;
+    # no client secret is valid or accepted for this flow.
+    console_oidc_client_id: str = ""
+    console_oidc_scopes: str = "openid profile"
+    console_oidc_redirect_uri: str = ""
+    console_oidc_resource: str = ""
+    console_oidc_authorization_endpoint: str = ""
+    console_oidc_token_endpoint: str = ""
 
     # Per-tenant partial HNSW index. 01-SCHEMA.sql suggests ~50k memories;
     # that is a guess about someone else's hardware, so it is a knob rather

@@ -17,6 +17,14 @@ exporters:
       insecure: true
   prometheus:
     endpoint: 0.0.0.0:8889
+  # Loki 3.x ingests OTLP natively at /otlp/v1/logs, so no loki-specific
+  # exporter or label mapping is needed — trace_id and span_id ride along as
+  # structured metadata, which is what makes "jump from this trace to its logs"
+  # work in Grafana.
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    tls:
+      insecure: true
   debug:
     verbosity: basic
 
@@ -40,6 +48,10 @@ service:
       processors: [batch]
       exporters: [prometheus]
     logs:
+      # Was `[debug]`, which prints a one-line summary and DISCARDS the payload.
+      # The pipeline existed, ran, and reported healthy while throwing every log
+      # away — the same shape of failure as the traces pipeline that had no SDK
+      # behind it.
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [otlphttp/loki]

@@ -49,10 +49,16 @@ pooling rather than failing loudly.
 ## Current state
 
 The foundation, Plane A ingestion, project binding, deterministic capture,
-retrieval, context assembly, four-tool MCP surface, curation inbox, extraction,
+retrieval, context assembly, the MCP tool and resource surface, curation inbox, extraction,
 entity/conflict work, and selected operational controls are implemented and
 covered by automated checks.
 
-Phase 3 is not accepted: Suite 1 currently misses the recall@5 and MRR gates.
-The cross-client Phase 4 milestone, the real curator-week Phase 5 trial, the
-five-arm Phase 6 benchmark, and the remaining Phase 8-9 work are still open.
+Suite 1 retrieval-quality gates pass on the pinned corpus: recall@5 = 0.900,
+MRR = 0.794, nDCG@10 = 0.815, and forbidden@10 = 0. The Phase 3 latency
+acceptance is still open: the latest warm search p95 is 548 ms, above the
+roadmap's <300 ms target. The evaluation harness records this as a failed gate;
+it does not treat a 60-second timeout as an acceptance threshold.
+
+The real cross-client Phase 4 milestone, the curator-week Phase 5 trial, the
+five-arm Phase 6 benchmark, the code-index comparison against grep, and the
+remaining Phase 8-9 scale work are still open.

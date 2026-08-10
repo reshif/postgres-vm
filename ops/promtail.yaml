@@ -1,0 +1,83 @@
+# Promtail — ships every container's stdout/stderr to Loki.
+#
+# Docker service discovery rather than a static file list, so a service added to
+# the compose file is collected without touching this config. The alternative —
+# per-service `logging: driver: loki` — spreads the decision across every service
+# definition and silently drops logs for any service someone forgets.
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  # On a volume: without it Promtail re-reads every log from the beginning on
+  # each restart, which duplicates history and makes "when did this start" wrong.
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+    # A logging pipeline must never become the reason the thing it watches goes
+    # down. Bounded retries, then drop.
+    backoff_config:
+      min_period: 500ms
+      max_period: 5s
+      max_retries: 5
+
+scrape_configs:
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+
+    relabel_configs:
+      # Compose service name, not the container name: container names carry a
+      # replica ordinal (`-api-1`), so labelling by them means scaling workers
+      # fragments a service's logs across a new label value per replica.
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: stack
+      # Promtail's own logs are not interesting and feed back on themselves.
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        regex: "promtail"
+        action: drop
+
+    pipeline_stages:
+      # Postgres logs a multi-line statement/context block. Without this, every
+      # continuation line becomes its own entry and a stack trace is unreadable.
+      - multiline:
+          firstline: '^(\d{4}-\d{2}-\d{2}|\[|\{|INFO:|WARNING:|ERROR:|CRITICAL:)'
+          max_wait_time: 3s
+
+      # DE-DUPLICATION. The Python services export their own logger records over
+      # OTLP, where they arrive with trace_id and span_id attached. Those exact
+      # lines are ALSO on the container's stdout, so without this rule Loki
+      # stores every application log twice — measured, not assumed:
+      #
+      #   ERROR:memory.injection:injection signals ...   <- Promtail copy
+      #   injection signals ...                          <- OTLP copy (richer)
+      #
+      # The OTLP copy is strictly better: same message, plus correlation. So the
+      # stdout copy of `LEVEL:memory.*:` lines is dropped here.
+      #
+      # Uvicorn's access logs are deliberately NOT dropped. Uvicorn configures
+      # its own loggers with propagate=False, so they never reach the root
+      # handler and never travel over OTLP — Promtail is their only path, and
+      # they are what answers "which request was that".
+      - drop:
+          expression: '^(DEBUG|INFO|WARNING|ERROR|CRITICAL):memory\.'
+          drop_counter_reason: duplicate_of_otlp
+
+      # Level as a label so "show me errors across the stack" is one query.
+      # Extracted from the line rather than guessed, and defaulted rather than
+      # left empty, because a missing label silently excludes lines from
+      # `{level="error"}` queries.
+      - regex:
+          expression: '(?P<level>FATAL|ERROR|CRITICAL|WARNING|WARN|INFO|DEBUG|PANIC)'
+      - labels:
+          level:
+      - static_labels:
+          source: docker

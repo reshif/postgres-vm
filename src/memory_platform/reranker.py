@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 from typing import Any
@@ -52,7 +53,20 @@ def available() -> bool:
 # back to RRF ordering — the accuracy gain vanished with no error anywhere except
 # the degradation reason this module records. Batching removes the coupling
 # between digest length and whether reranking happens at all.
-BATCH = 8
+#
+# 8 STAYS, and it was tested rather than assumed. A batch of 1 measured 2157 ms
+# against a batch of 8 at 1986 ms, which looks like fixed per-request overhead —
+# implying fewer, larger round trips would be much faster. So the server was
+# given --max-batch-tokens 8192 --auto-truncate and this was raised to 32.
+#
+# It got WORSE: 40 candidates went 7374 ms -> 19422 ms, and a batch of 8 went
+# 1986 -> 2947 ms. TEI logs `forcing max_batch_requests=8`, so it processes 8
+# pairs at a time whatever the ceiling says; the larger value only padded each
+# batch to a longer sequence. The cost is per-token compute, not per-request
+# overhead, and the original reading was wrong.
+#
+# Reduce MEMORY_RERANK_TOP_K to make reranking cheaper. Not this.
+BATCH = int(os.environ.get("MEMORY_RERANK_BATCH", "8"))
 
 
 def rerank_pairs(query: str, texts: list[str], *, timeout: float = 30.0) -> list[float]:
@@ -64,6 +78,8 @@ def rerank_pairs(query: str, texts: list[str], *, timeout: float = 30.0) -> list
     """
     if not texts:
         return []
+    from .telemetry import tracer
+
     url = settings().rerank_url.rstrip("/") + "/rerank"
     scores = [0.0] * len(texts)
 
@@ -74,11 +90,22 @@ def rerank_pairs(query: str, texts: list[str], *, timeout: float = 30.0) -> list
             url, data=json.dumps(payload).encode(),
             headers={"Content-Type": "application/json"},
         )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                data = json.load(r)
-        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-            raise RerankUnavailable(f"{url}: {exc}") from exc
+        # One span per batch, for the same reason as the embedder: this is a
+        # urllib call the httpx instrumentation cannot see. Per batch rather
+        # than per call because batching is what fixed the silent 413, and a
+        # span count that stops matching ceil(n/BATCH) is how a regression there
+        # would show up.
+        with tracer("memory.reranker").start_as_current_span("rerank.http") as span:
+            try:
+                span.set_attribute("rerank.batch_size", len(chunk))
+                span.set_attribute("http.url", url)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    data = json.load(r)
+            except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+                raise RerankUnavailable(f"{url}: {exc}") from exc
 
         if not isinstance(data, list):
             raise RerankUnavailable(f"unexpected rerank response: {str(data)[:200]}")

@@ -55,6 +55,8 @@ def scoped(
     principal_id: UUID,
     project_id: UUID | None,
     project_ids: list[UUID] | None = None,
+    *,
+    direct: bool = False,
 ) -> Iterator[Connection]:
     """Open a transaction with RLS scope context established.
 
@@ -62,7 +64,10 @@ def scoped(
     scope, you are writing an admin tool and should say so explicitly.
     """
     projects = project_ids if project_ids is not None else ([project_id] if project_id else [])
-    with engine().begin() as conn:
+    # The API must use the transaction pool. Workers, migration-adjacent jobs,
+    # and Procrastinate listeners must not: their direct connection is what
+    # keeps LISTEN/NOTIFY and long-running maintenance out of the shared pool.
+    with (engine_direct() if direct else engine()).begin() as conn:
         conn.execute(
             text("SELECT mem.fn_set_scope(:t, :pr, :p, CAST(:ps AS uuid[]))"),
             {

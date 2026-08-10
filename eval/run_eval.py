@@ -35,7 +35,8 @@ from uuid import UUID
 from sqlalchemy import text
 
 sys.path.insert(0, "/app/src")
-from memory_platform import context, db, ingest, memories  # noqa: E402
+from memory_platform import context, db, evaluation, ingest, memories, ranking  # noqa: E402
+from memory_platform.config import settings  # noqa: E402
 
 # A dedicated tenant, and it must NOT be the one the scheduler's dev binding
 # writes to. Those ids were the same, so poll ingestion kept adding live
@@ -55,6 +56,22 @@ LIVE_ROOT = Path("/repo")          # only used to detect snapshot drift
 GOLDEN = LIVE_ROOT / "eval" / "golden_set.json"
 
 GATES = {"recall@5": 0.90, "mrr": 0.75, "ndcg@10": 0.70, "forbidden@10": 0.0}
+LATENCY_GATE_MS = 300.0
+
+
+def gate_failures(metrics: dict[str, float | int], p95_latency_ms: float) -> list[str]:
+    """Return every Suite 1 acceptance failure, including end-to-end latency.
+
+    A timeout is not a latency target. Keeping this comparison in one pure
+    function makes the persisted evaluation status and the process exit code
+    impossible to accidentally disagree about whether Phase 3 is accepted.
+    """
+    failures = [metric for metric, gate in GATES.items()
+                if (metrics[metric] > gate if metric.startswith("forbidden")
+                    else metrics[metric] < gate)]
+    if p95_latency_ms >= LATENCY_GATE_MS:
+        failures.append("p95_latency_ms")
+    return failures
 
 
 def corpus_paths(root: Path) -> list[str]:
@@ -234,6 +251,28 @@ def run(case_ids: set[str] | None = None) -> int:
            for m in ("recall@1", "recall@3", "recall@5", "recall@10", "mrr", "ndcg@10")}
     agg["forbidden@10"] = sum(c["forbidden@10"] for c in per_case)
 
+    p95_latency = sorted(latencies)[int(len(latencies)*0.95)-1]
+    failures = gate_failures(agg, p95_latency)
+    run_status = "passed" if not failures else "failed"
+    with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
+        profile, _ = ranking.load_profile(c)
+        evaluation.record_run(
+            c, tenant_id=TENANT, project_id=PROJECT, principal_id=PRINCIPAL,
+            suite="retrieval-accuracy", status=run_status,
+            corpus_snapshot=str(golden.get("snapshot") or ""),
+            ranking_profile=profile,
+            metrics={**agg, "p95_latency_ms": round(p95_latency, 3),
+                     "forbidden@10": agg["forbidden@10"], "case_count": len(cases)},
+            configuration={"rerank_enabled": settings().rerank_enabled,
+                           "embedding_model": settings().embedding_model},
+            cases=[{
+                "case_id": case["id"], "query_text": case["query"],
+                "status": "passed" if case["recall@5"] == 1
+                and case["forbidden@10"] == 0 else "failed",
+                "result": {key: value for key, value in case.items() if key not in {"id", "query"}},
+            } for case in per_case],
+        )
+
     print(f"\n{'='*66}\nSuite 1 — retrieval accuracy   ({len(cases)} cases)\n{'='*66}")
     for m in ("recall@1", "recall@3", "recall@5", "recall@10", "mrr", "ndcg@10"):
         gate = GATES.get(m)
@@ -242,8 +281,8 @@ def run(case_ids: set[str] | None = None) -> int:
         print(f"  {m:12} {agg[m]:.3f}{gate_s}{mark}")
     fk = agg["forbidden@10"]
     print(f"  {'forbidden@10':12} {fk:.0f}  (gate 0){'  PASS' if fk == 0 else '  FAIL'}")
-    print(f"  {'p95 latency':12} {sorted(latencies)[int(len(latencies)*0.95)-1]:.0f} ms"
-          f"   {'PASS' if sorted(latencies)[int(len(latencies)*0.95)-1] < 60000 else ''}")
+    print(f"  {'p95 latency':12} {p95_latency:.0f} ms  (gate < {LATENCY_GATE_MS:.0f} ms)"
+          f"  {'PASS' if p95_latency < LATENCY_GATE_MS else 'FAIL'}")
 
     worst = sorted(per_case, key=lambda c: (c["recall@5"], c["mrr"]))[:5]
     print(f"\nWeakest cases (these are where to look, not the average):")
@@ -256,8 +295,6 @@ def run(case_ids: set[str] | None = None) -> int:
         )
         print(f"        expected: {positions}")
 
-    failures = [m for m, g in GATES.items()
-                if (agg[m] > g if m.startswith("forbidden") else agg[m] < g)]
     if failures:
         print(f"\nGATES FAILED: {', '.join(failures)}")
         return 1

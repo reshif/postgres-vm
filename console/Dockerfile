@@ -1,13 +1,17 @@
-# Knowledge Console.
-#
-# nginx serving static files, and proxying /v1 and /readyz through to the api
-# service. The proxy is the point: the console and the API share an origin, so
-# there is no CORS configuration to get wrong and no credential that has to be
-# readable by browser JavaScript to be usable.
-FROM nginx:1.27-alpine
+# Knowledge Console: statically exported Next.js application served by nginx.
+# The console talks to the API only through nginx's same-origin proxy, never to
+# PostgreSQL. The build generates CSP hashes for Next's tiny RSC bootstrap
+# scripts, so stored content remains unable to execute arbitrary JavaScript.
+FROM node:22.13-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . ./
+RUN npm run build
 
+FROM nginx:1.27-alpine
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY public/ /usr/share/nginx/html/
+COPY --from=build /app/out/ /usr/share/nginx/html/
 
 EXPOSE 3000
 

@@ -1,0 +1,23 @@
+# Dashboard provider.
+#
+# THIS FILE IS WHY GRAFANA WAS EMPTY. `./ops/grafana` was mounted at
+# /etc/grafana/provisioning and contained only `datasources/`, so Grafana had
+# somewhere to read data FROM and nothing to draw. Datasource provisioning and
+# dashboard provisioning are separate providers; configuring one does not imply
+# the other, and neither logs a complaint about the other's absence.
+apiVersion: 1
+
+providers:
+  - name: memory-platform
+    orgId: 1
+    folder: Memory Platform
+    type: file
+    disableDeletion: false
+    # Picks up edits to the JSON without a Grafana restart.
+    updateIntervalSeconds: 30
+    # Without this, a dashboard edited in the UI cannot be overwritten by the
+    # file on disk, and the provisioned version silently stops being the truth.
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

@@ -26,7 +26,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 sys.path.insert(0, "/app/src")
-from memory_platform import db, memories  # noqa: E402
+from memory_platform import context, db, memories  # noqa: E402
 
 RUN = uuid.uuid4().hex[:8]
 TENANT = UUID("70090000-0000-0000-0000-0000000000a1")
@@ -126,6 +126,33 @@ def main() -> None:
     check("as_of(now) returns PostgreSQL 17",
           any("17" in t for t in after) and not any("15" in t for t in after),
           str(after))
+
+    # `as_of` is not only a raw SQL capability. It must reach the pack builder
+    # that agents actually call, otherwise the Timeline could show one history
+    # while MCP context silently tells an agent today's belief.
+    with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
+        historical_pack = context.build_pack(
+            c, f"Which PostgreSQL version did we run? {RUN}",
+            tenant_id=TENANT, project_id=PROJECT, principal_id=PRINCIPAL,
+            token_budget=4000, as_of=switch - timedelta(days=1))
+    historical_refs = {
+        str(item.get("ref"))
+        for section in historical_pack["sections"].values()
+        for item in section if item.get("ref")
+    }
+    # MMR may collapse the fixture into an older run of this deterministic
+    # temporal suite; `also_seen_in` is the explicit provenance for that
+    # collapse, so it still proves this particular historical version entered
+    # the pack candidate set. It must never be replaced by the future version.
+    historical_refs |= {
+        str(ref)
+        for section in historical_pack["sections"].values()
+        for item in section
+        for ref in item.get("also_seen_in", [])
+    }
+    check("context packs honour as_of, not just raw SQL",
+          str(old["id"]) in historical_refs and str(new["id"]) not in historical_refs,
+          str(historical_pack["as_of"]))
 
     # ---- 4. bi-temporal: belief time, not just validity -------------------
     print("\n4. Bi-temporal — what we BELIEVED then, not what we know now")

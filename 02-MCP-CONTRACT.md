@@ -120,6 +120,12 @@ Notes:
 - `intent: "timeline"` returns chronologically ordered results with valid-time boundaries — this replaces `memory_timeline`.
 - `intent: "impact"` activates 2-hop graph traversal — this replaces `memory_related`.
 - Results always include `trust`, `source`, and `valid_from`. Never return bare text.
+- A non-empty candidate pool is not evidence by itself. A calibrated cross-encoder
+  score is a ranking and corroboration signal, never stand-alone proof for a
+  claim. When no candidate has sufficient direct or resolved-relationship
+  evidence, the response is
+  `answerability.status = "no_relevant_evidence"`, `count = 0`, and carries a
+  notice that the current project memory has no evidence for the query.
 
 ### 2.3 `memory.write`
 

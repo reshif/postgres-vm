@@ -4,8 +4,51 @@ Every row is measured against a named corpus snapshot. **Results from different
 snapshots are not comparable** — that is the whole reason the corpus is pinned
 (see `SNAPSHOT.md`).
 
-Gates (04-EVALUATION.md §3): `recall@5 ≥ 0.90`, `MRR ≥ 0.75`, `nDCG@10 ≥ 0.70`,
-`forbidden@10 = 0`.
+Gates (04-EVALUATION.md §3 and 05-BUILD-PLAN Phase 3): `recall@5 ≥ 0.90`,
+`MRR ≥ 0.75`, `nDCG@10 ≥ 0.70`, `forbidden@10 = 0`, and p95 search latency
+`< 300 ms`.
+
+---
+
+## Snapshot `12d2cbc619bf41dc` — cross-encoder rerank ON, `top_k=10`
+
+Same corpus and snapshot as the baseline below, so the two rows are comparable.
+Reranking enabled (`MEMORY_RERANK_ENABLED=true`, `MEMORY_RERANK_TOP_K=10`),
+`bge-reranker-base` on CPU via TEI. bge-m3 embeddings via Ollama on the AMD
+iGPU (Vulkan).
+
+| metric | rerank OFF | rerank ON | gate |
+|---|---:|---:|---:|
+| recall@1 | 0.642 | **0.682** | — |
+| recall@3 | — | 0.858 | — |
+| recall@5 | 0.900 | **0.930** | 0.90 |
+| recall@10 | 0.955 | **0.982** | — |
+| MRR | 0.794 | **0.842** | 0.75 |
+| nDCG@10 | 0.815 | **0.857** | 0.70 |
+| forbidden@10 | 0 | 0 | 0 |
+| p95 latency | 548 ms | 6347 ms | < 300 ms |
+
+Every quality gate passes with a wider margin, and only latency fails. Enabled
+deliberately for single-user testing, where quality is worth seconds; it must be
+re-evaluated before multi-user use.
+
+### Why `top_k=10` and not the blueprint's 40
+
+Reranking cost is linear in candidates and measured at ~184 ms each (synthetic)
+to ~300 ms (real digests) on this CPU, so 40 candidates cost ~7.4 s against
+~2.5-4.3 s for 10. Most of the recall@1 gain comes from reordering the head of
+the list, so the smaller value keeps the quality that matters.
+
+### What did NOT work, so nobody repeats it
+
+* **Bigger batches.** `--max-batch-tokens 8192 --auto-truncate` with `BATCH=32`
+  was expected to beat five round trips. Measured: 40 docs went 7374 ms ->
+  19422 ms. TEI logs `forcing max_batch_requests=8` and processes 8 pairs at a
+  time regardless; the larger ceiling only padded batches to longer sequences.
+* **Reranking on the GPU.** llama.cpp with a Vulkan build and
+  `bge-reranker-v2-m3-Q8_0`, on the AMD iGPU with the GPU to itself: 464 ms/doc
+  versus 184 ms/doc for TEI on CPU. Encoder inference is memory-bandwidth bound
+  and an integrated GPU shares system RAM, so there is no bandwidth to win.
 
 ---
 
@@ -17,28 +60,26 @@ The corpus fingerprint is `c3ab0ec62f77`.
 
 | metric | result | gate |
 |---|---:|---:|
-| recall@1 | 0.533 | — |
-| recall@5 | 0.800 | 0.90 ✗ |
-| recall@10 | 0.900 | — |
-| MRR | 0.694 | 0.75 ✗ |
-| nDCG@10 | 0.728 | 0.70 ✓ |
+| recall@1 | 0.642 | — |
+| recall@5 | 0.900 | 0.90 ✓ |
+| recall@10 | 0.955 | — |
+| MRR | 0.794 | 0.75 ✓ |
+| nDCG@10 | 0.815 | 0.70 ✓ |
 | forbidden@10 | 0 | 0 ✓ |
-| p95 latency | 443 ms | < 60,000 ms ✓ |
+| p95 latency | 548 ms | < 300 ms ✗ |
 
 The previous snapshot included machine-local `binding.json` in its identity,
 which made its drift warning non-actionable. The snapshot and evaluator now
 exclude that local CLI state. This is a new baseline, so it must not be compared
-to the measurements below. Phase 3 remains open because recall@5 and MRR fail.
+to the measurements below. Quality gates now pass, but Phase 3 remains open
+because the measured end-to-end p95 is above the latency gate.
 
 ### Failure classification
 
-The five weakest cases were inspected with a 40-result diagnostic window. Their
-expected memories were present at ranks 11–22, not absent from the candidate
-set. The immediate problem is therefore semantic ranking, not an ANN/filter
-recall failure: expand the traced benchmark before choosing a reranking or query
-expansion change. The evaluator now prints those expected positions for every
-weak case, and the debugger exports a review-only template with stable keys and
-content hashes to make that expansion auditable.
+The evaluator retains a 40-result diagnostic window and prints expected
+positions for the weakest cases. The debugger exports a review-only template
+with stable keys and content hashes so ranking work remains auditable. Latency
+work must target the traced embedding path rather than lower the gate.
 
 ---
 

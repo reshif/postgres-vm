@@ -254,6 +254,14 @@ def _audit(conn: Connection, tenant_id: UUID, principal: UUID, action: str,
     Curation is the one place a human can raise the trust of machine-written
     content. An unaudited promotion is indistinguishable from a compromise.
     """
+    project = conn.execute(text(
+        "SELECT project_id FROM mem.memories WHERE id = :object "
+        "UNION ALL "
+        "SELECT project_id FROM mem.conflicts WHERE id = :object "
+        "LIMIT 1"), {"object": str(obj)}).scalar_one_or_none()
+    scope_context = {"tenant": str(tenant_id)}
+    if project is not None:
+        scope_context["project"] = str(project)
     conn.execute(
         text("INSERT INTO mem.audit_log "
              "  (tenant_id, principal_id, action, object_type, object_id, "
@@ -261,5 +269,5 @@ def _audit(conn: Connection, tenant_id: UUID, principal: UUID, action: str,
              "VALUES (:t, :p, :a, 'memory', :o, CAST(:sc AS jsonb), 'allow', "
              "        CAST(:d AS jsonb))"),
         {"t": str(tenant_id), "p": str(principal), "a": f"review.{action}",
-         "o": str(obj), "sc": _json({"tenant": str(tenant_id)}), "d": _json(detail)},
+         "o": str(obj), "sc": _json(scope_context), "d": _json(detail)},
     )

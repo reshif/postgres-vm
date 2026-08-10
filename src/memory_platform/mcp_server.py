@@ -120,6 +120,7 @@ TOOLS: list[dict[str, Any]] = [
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 8},
                 "include_unverified": {"type": "boolean", "default": False},
+                "as_of": {"type": "string", "format": "date-time"},
             },
         },
     },
@@ -158,6 +159,24 @@ TOOLS: list[dict[str, Any]] = [
 ]
 
 CACHE = {"ttlMs": 3600000, "cacheScope": "public"}
+# Resources contain one project's data and may change with curation, so they
+# must never share a cache entry across callers or remain stale for an hour.
+RESOURCE_CACHE = {"ttlMs": 300000, "cacheScope": "private"}
+
+RESOURCE_TEMPLATES: list[dict[str, Any]] = [
+    {
+        "uriTemplate": "memory://memory/{ref}",
+        "name": "Memory",
+        "description": "One memory with full content, provenance, versions, and supersessions.",
+        "mimeType": "application/json",
+    },
+    {
+        "uriTemplate": "memory://entity/{id}",
+        "name": "Entity",
+        "description": "One entity with aliases, relationships, and key memories.",
+        "mimeType": "application/json",
+    },
+]
 
 
 def _result(rid: Any, payload: dict) -> JSONResponse:
@@ -198,7 +217,11 @@ def _resolve_scope(request: Request) -> dict:
 
     claims = _auth.verify_token(_auth.bearer(request.headers.get("authorization")))
     with httpx.Client(base_url=API_URL, timeout=30.0) as c:
-        r = c.post("/v1/scope/resolve", json={"claims": claims})
+        # The API independently verifies this bearer before returning a scope.
+        # Sending claims is retained only for a local API with OAuth disabled;
+        # claims are ignored whenever OAuth is enabled.
+        r = c.post("/v1/scope/resolve", json={"claims": claims},
+                   headers={"Authorization": request.headers.get("authorization", "")})
         if r.status_code == 403:
             raise _auth.Forbidden(r.json().get("detail", "not granted"))
         r.raise_for_status()
@@ -234,7 +257,10 @@ async def mcp(request: Request) -> Response:
         negotiated = requested if requested in COMPATIBLE else PROTOCOL_VERSION
         return _plain(rid, {
             "protocolVersion": negotiated,
-            "capabilities": {"tools": {"listChanged": False}},
+            "capabilities": {
+                "tools": {"listChanged": False},
+                "resources": {"subscribe": False, "listChanged": False},
+            },
             "serverInfo": SERVER_INFO,
         })
 
@@ -245,15 +271,54 @@ async def mcp(request: Request) -> Response:
         return _result(rid, {
             "protocolVersions": SUPPORTED,
             "serverInfo": SERVER_INFO,
-            "capabilities": {"tools": {}, "resources": {}, "extensions": {}},
+            "capabilities": {
+                "tools": {},
+                "resources": {"subscribe": False, "listChanged": False},
+                "extensions": {},
+            },
             **CACHE,
         })
 
     if method == "tools/list":
         return _result(rid, {"tools": TOOLS, **CACHE})
 
-    if method == "resources/list":
-        return _result(rid, {"resources": [], **CACHE})
+    if method in {"resources/list", "resources/templates/list", "resources/read"}:
+        from . import auth as _auth
+        try:
+            scope = _resolve_scope(request)
+        except _auth.AuthError as exc:
+            return _error(rid, -32002, f"unauthorized: {exc}")
+        except _auth.Forbidden as exc:
+            return _error(rid, -32003, f"forbidden: {exc}")
+
+        if method == "resources/templates/list":
+            return _result(rid, {"resourceTemplates": RESOURCE_TEMPLATES, **RESOURCE_CACHE})
+
+        if method == "resources/read":
+            uri = params.get("uri")
+            if not isinstance(uri, str) or not uri:
+                return _error(rid, -32602, "resources/read requires a resource URI")
+            path, query = "/v1/resources/read", {**scope, "uri": uri}
+        else:
+            path, query = "/v1/resources", scope
+
+        try:
+            with httpx.Client(base_url=API_URL, timeout=30.0) as client:
+                response = client.get(
+                    path, params=query,
+                    headers={"Authorization": request.headers.get("authorization", "")},
+                )
+                response.raise_for_status()
+                payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            body = exc.response.text[:300]
+            return _error(rid, -32003, f"resource api {exc.response.status_code}: {body}")
+        except httpx.HTTPError as exc:
+            return _error(rid, -32004, f"resource api unreachable: {exc}")
+
+        if method == "resources/read":
+            payload = {"contents": [payload]}
+        return _result(rid, {**payload, **RESOURCE_CACHE})
 
     if method == "tools/call":
         raw_name = params.get("name")
@@ -273,7 +338,10 @@ async def mcp(request: Request) -> Response:
             return _error(rid, -32003, f"forbidden: {exc}")
 
         try:
-            return _result(rid, _dispatch(name, params.get("arguments") or {}, scope))
+            return _result(rid, _dispatch(
+                name, params.get("arguments") or {}, scope,
+                request.headers.get("authorization"),
+            ))
         except httpx.HTTPStatusError as exc:
             body = exc.response.text[:300]
             return _error(rid, -32003, f"context api {exc.response.status_code}: {body}")
@@ -287,7 +355,7 @@ SCOPE = lambda: {"tenant_id": DEV_TENANT, "project_id": DEV_PROJECT,
                  **({"principal_id": DEV_PRINCIPAL} if DEV_PRINCIPAL else {})}
 
 
-def _dispatch(name: str, args: dict, scope: dict) -> dict:
+def _dispatch(name: str, args: dict, scope: dict, authorization: str | None = None) -> dict:
     """Proxy the tool to the context API.
 
     The gateway holds no database credentials and builds no packs. 00-MASTER-
@@ -296,20 +364,28 @@ def _dispatch(name: str, args: dict, scope: dict) -> dict:
     engine is the part that changes weekly. A gateway that queries the database
     directly is a second, less-reviewed copy of the isolation model.
     """
-    with httpx.Client(base_url=API_URL, timeout=120.0) as c:
+    headers = {"Authorization": authorization} if authorization else {}
+    with httpx.Client(base_url=API_URL, timeout=120.0, headers=headers) as c:
         if name == "memory_context":
             r = c.post("/v1/context", json={
                 **scope, "task": args.get("task", ""),
                 "token_budget": args.get("token_budget", 4000),
                 "window_fill_pct": args.get("window_fill_pct"),
                 "include_unverified": bool(args.get("include_unverified", False)),
+                "as_of": args.get("as_of"),
             })
         elif name == "memory_search":
-            r = c.get("/v1/search", params={
+            params = {
                 **scope, "q": args.get("query", ""),
                 "refs": ",".join(args.get("refs") or []),
                 "limit": args.get("limit", 8),
-            })
+            }
+            # httpx serialises None query values as an empty string. FastAPI then
+            # correctly rejects that as an invalid datetime, so omit an absent
+            # time cursor instead of sending ``as_of=`` on every normal search.
+            if args.get("as_of"):
+                params["as_of"] = args["as_of"]
+            r = c.get("/v1/search", params=params)
         elif name == "memory_write":
             # `tier` is absent by design — the server assigns it from source_type.
             # An agent-authored memory is `inferred` and quarantined, which is the

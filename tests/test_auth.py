@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy import text
 
 sys.path.insert(0, "/app/src")
-from memory_platform import auth, db  # noqa: E402
+from memory_platform import api, auth, db  # noqa: E402
 from memory_platform.config import Settings  # noqa: E402
 
 RUN = uuid.uuid4().hex[:8]
@@ -59,7 +59,11 @@ def with_settings(**over):
     """Point auth at a test configuration without touching the environment."""
     base = dict(oauth_issuer=ISSUER, oauth_audience=AUDIENCE,
                 oauth_algorithms="RS256", oauth_leeway_s=5,
-                oauth_org_claim="org", oauth_project_claim="project")
+                oauth_org_claim="org", oauth_project_claim="project",
+                console_oidc_client_id="console-test-client",
+                console_oidc_authorization_endpoint="https://issuer.example.test/authorize",
+                console_oidc_token_endpoint="https://issuer.example.test/token",
+                console_oidc_resource=AUDIENCE)
     base.update(over)
     # Only the real (lru_cached) settings has cache_clear; after the first call
     # this attribute is the stub installed below.
@@ -179,6 +183,55 @@ def main() -> None:
         again = auth.resolve_scope(c, auth.verify_token(make_token()))
     check("the same subject resolves to the same principal",
           again.principal_id == scope.principal_id)
+
+    # ---- 6b. API requests cannot replace the resolved scope ----------------
+    print("\n6b. Direct API requests remain token-bound")
+    # TestClient executes the public ASGI boundary, including the middleware.
+    # Point the API's settings reference at the same test OAuth configuration
+    # used by the verifier above; production gets both from environment.
+    api.settings = auth.settings  # type: ignore[assignment]
+    from fastapi.testclient import TestClient
+
+    token = make_token()
+    headers = {"Authorization": f"Bearer {token}"}
+    with TestClient(api.app, raise_server_exceptions=False) as client:
+        good = scope.as_params()
+        allowed = client.get("/v1/console/views", params=good, headers=headers)
+        check("a matching direct API scope is allowed", allowed.status_code == 200,
+              str(allowed.status_code))
+
+        forged = {**good, "project_id": str(uuid.uuid4())}
+        rejected_query = client.get("/v1/console/views", params=forged, headers=headers)
+        check("a forged query project is rejected before handler execution",
+              rejected_query.status_code == 403, str(rejected_query.status_code))
+
+        rejected_body = client.post("/v1/context", json={
+            **good, "project_id": str(uuid.uuid4()), "task": "must not run",
+        }, headers=headers)
+        check("a forged JSON project is rejected before context assembly",
+              rejected_body.status_code == 403, str(rejected_body.status_code))
+
+        missing = client.get("/v1/console/views", params=good)
+        check("a direct API scope requires a bearer token", missing.status_code == 401,
+              str(missing.status_code))
+
+        scope_response = client.post("/v1/scope/resolve", json={
+            "claims": {"org": "forged", "project": "forged", "sub": "attacker"},
+        }, headers=headers)
+        check("scope resolution ignores JSON claims when OAuth is enabled",
+              scope_response.status_code == 200
+              and scope_response.json().get("project_id") == str(scope.project_id),
+              str(scope_response.status_code))
+
+        console_response = client.get("/v1/console/config", headers=headers)
+        console_data = console_response.json()
+        check("console bootstrap derives scope from its verified bearer token",
+              console_response.status_code == 200
+              and console_data.get("project_id") == str(scope.project_id)
+              and console_data.get("tenant_id") == str(scope.tenant_id)
+              and console_data.get("oidc", {}).get("configured") is True
+              and console_data.get("oidc", {}).get("client_id") == "console-test-client",
+              str(console_data)[:180])
 
     # ---- 7. a token cannot name a project it was not granted --------------
     print("\n7. Claims cannot conjure access")

@@ -1,0 +1,82 @@
+# Recording rules.
+#
+# WHY THESE EXIST. The §7.3 production gates are written over multi-day windows:
+# "p95 memory.context < 350 ms for 7 days", "Suite 2 at 100% for 30 consecutive
+# days", "review inbox median depth < 40 for 14 days". Evaluating those directly
+# against raw histogram buckets means Prometheus walks millions of samples on
+# every dashboard refresh, and the query is slow enough that people stop asking.
+#
+# Pre-computing the 5-minute figure once per evaluation turns a 7-day question
+# into an aggregation over ~2000 points. It also gives the gate a single stable
+# name, so the alert, the dashboard and any future report all reference the same
+# definition rather than three subtly different hand-written expressions.
+groups:
+  - name: memory-platform-gates
+    interval: 30s
+    rules:
+      # ---- retrieval latency, the Phase 3 and §7.3 gate --------------------
+      - record: memory:context_latency_p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(memory_context_duration_seconds_bucket[5m]))
+          )
+
+      - record: memory:context_latency_p99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(memory_context_duration_seconds_bucket[5m]))
+          )
+
+      # Per-stage, so "is it the embedder again" is answerable without
+      # re-deriving the expression each time.
+      - record: memory:context_stage_p95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le, stage) (rate(memory_context_stage_duration_seconds_bucket[5m]))
+          )
+
+      # ---- write -> retrievable, §7.3 p99 < 5 s ---------------------------
+      - record: memory:write_latency_p99
+        expr: |
+          histogram_quantile(
+            0.99,
+            sum by (le) (rate(memory_write_duration_seconds_bucket[5m]))
+          )
+
+      # ---- throughput and health ------------------------------------------
+      - record: memory:packs_per_minute
+        expr: sum(rate(memory_context_duration_seconds_count[5m])) * 60
+
+      # Share of packs served without the vector arm. A ratio rather than a
+      # count, because "12 degraded packs" means nothing without the
+      # denominator — 12 out of 12 and 12 out of 100000 are different incidents.
+      - record: memory:degraded_pack_ratio
+        expr: |
+          sum(rate(memory_pack_degraded_total[5m]))
+          /
+          clamp_min(sum(rate(memory_context_duration_seconds_count[5m])), 0.0001)
+
+      # ---- trust attribution, capability C4 -------------------------------
+      # Fraction of returned items that were reviewed (observed or better).
+      # C4 wants >= 95% correct trust attribution; tier-0 must be exactly zero.
+      - record: memory:pack_untrusted_ratio
+        expr: |
+          sum(rate(memory_pack_items_total{tier="untrusted"}[10m]))
+          /
+          clamp_min(sum(rate(memory_pack_items_total[10m])), 0.0001)
+
+      # ---- the gates, as booleans ------------------------------------------
+      # 1 when the gate is being met right now. Averaging one of these over 7d
+      # gives "the fraction of the last week we were inside the gate", which is
+      # what "for 7 days" actually asks and is otherwise fiddly to express.
+      - record: memory:gate_context_latency_ok
+        expr: (memory:context_latency_p95 < bool 0.35)
+
+      - record: memory:gate_write_latency_ok
+        expr: (memory:write_latency_p99 < bool 5)
+
+      - record: memory:gate_inbox_depth_ok
+        expr: (max(memory_inbox_depth) < bool 40)

@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 node_modules/
 .next/
+console/out/
 
 .scratch/
 .memory/binding.json

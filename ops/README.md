@@ -154,6 +154,69 @@ Scale explicitly:
 docker compose up -d --scale worker=2
 ```
 
+## Observability
+
+| Surface | URL | What it answers |
+|---|---|---|
+| Grafana | http://localhost:3001 | Dashboards, logs (Explore → Loki), traces |
+| Prometheus | http://localhost:9090 | `/targets` when a panel is empty, `/alerts` for the gates |
+| Alertmanager | http://localhost:9093 | What is firing, grouping, silences |
+| Tempo | http://localhost:3200 | Trace lookup by id (Grafana is the usual front end) |
+| Loki | (internal `loki:3100`) | Log store; query it through Grafana Explore |
+
+**Metrics, logs and traces are joined.** Application logs go out over OTLP with
+the trace id attached, so a span links straight to the log lines written inside
+it and back again. Postgres, PgBouncer and nginx will never speak OTLP; Promtail
+ships their container output into the same store, which is what you actually want
+at 3am. `{service="postgres"} |= "FATAL"` is one query.
+
+**Alerting.** Prometheus evaluates, Alertmanager notifies. The default receiver
+is a deliberately-named blackhole — alerts appear in Alertmanager and Grafana but
+page nobody until a receiver is configured in `ops/alertmanager.yml`. That is
+better than a config that pretends to page someone, which is discovered during an
+incident. Critical alerts route immediately; curation alerts (ADR-0015) are on a
+daily cadence because that failure mode plays out over weeks and paging for it at
+night trains people to ignore the channel.
+
+**Dashboards.** *Memory — Retrieval & Context Packs* covers the serving path:
+p95 pack latency against the 350 ms production gate, latency by stage, per-arm
+retrieval contribution, trust tier of returned items, and why candidates were
+dropped. *Memory — Curation & Trust* covers ADR-0015: review backlog against the
+100/200 thresholds, the extraction kill switch, acceptance rate against the
+30–85% band, and writes by assigned tier.
+
+Both are provisioned from `ops/grafana/dashboards/`. Edit the JSON and Grafana
+picks it up within 30 seconds — no restart, no re-import.
+
+**Where the metrics come from, and why it is split.** Request-time metrics come
+from the API, recorded from work already done for a caller who proved their
+scope. The backlog and curation gauges come from the **scheduler**, because they
+are per-project aggregates: the API runs as `memory_app`, which is NOBYPASSRLS,
+and a Prometheus scrape carries no scope. Giving the API a BYPASSRLS connection
+so a dashboard could compute them would put a read-every-tenant role inside the
+process that serves untrusted callers. `ops/prometheus.yml` therefore scrapes
+both `api:8080` and `scheduler:9100`.
+
+**Tracing.** `OTEL_EXPORTER_OTLP_ENDPOINT` alone emits nothing — the SDK has to
+be installed and attached, which `memory_platform/telemetry.py` does. FastAPI,
+httpx and psycopg are auto-instrumented. The embedder and cross-encoder call out
+over `urllib`, which no auto-instrumentation sees, so they carry explicit spans
+(`embed.http`, `rerank.http`); without them a 780 ms pack traces as 30 ms of SQL
+and points you at the database, which is the one place the time is not going.
+
+**When a panel is empty,** check in this order — it is almost always the first:
+
+1. `http://localhost:9090/targets` — is the target UP?
+2. Has any traffic happened? A *labelled* histogram exports no series at all
+   until its first observation, so a metric can be legitimately absent rather
+   than zero on a freshly restarted API.
+3. `docker compose logs otel-collector` — is anything arriving?
+
+`sh tests/run-all.sh` includes `test_observability`, which asserts delivered
+data end to end rather than container health. It exists because the collector,
+Tempo, Prometheus and Grafana all ran green for the entire build while the trace
+pipeline carried zero bytes and Grafana had no dashboards at all.
+
 ## Production
 
 ```sh

@@ -74,7 +74,15 @@ x-common-env: &common-env
   # Cross-encoder rerank (ADR-0013). Off unless the eval proves it wins.
   MEMORY_RERANK_ENABLED: ${MEMORY_RERANK_ENABLED:-false}
   MEMORY_RERANK_URL: ${MEMORY_RERANK_URL:-http://reranker:80}
-  MEMORY_RERANK_TOP_K: "40"
+  # How many candidates the cross-encoder scores. This is the real latency
+  # dial: cost is linear in candidates and measured at ~184 ms each on CPU,
+  # so 40 costs ~7.4 s and 10 costs ~1.8 s. Most of the recall@1 gain comes
+  # from reordering the HEAD of the list, so a smaller value keeps most of
+  # the quality for a quarter of the time.
+  MEMORY_RERANK_TOP_K: ${MEMORY_RERANK_TOP_K:-40}
+  # Minimum raw cross-encoder score used to corroborate direct evidence.
+  # It never stands alone as proof that the project contains an answer.
+  MEMORY_EVIDENCE_RERANK_MIN_SCORE: ${MEMORY_EVIDENCE_RERANK_MIN_SCORE:-0.05}
   # Admission control (Phase 9). Off unless a deployment has tuned it: a limit
   # nobody sized for the traffic is a self-inflicted outage waiting for a spike.
   MEMORY_LIMITS_ENABLED: ${MEMORY_LIMITS_ENABLED:-false}
@@ -289,7 +297,25 @@ services:
     profiles: ["rerank"]
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
     restart: unless-stopped
-    command: ["--model-id", "BAAI/bge-reranker-base", "--max-batch-tokens", "512"]
+    # --max-batch-tokens stays at 512, and that is a MEASURED choice, not a
+    # leftover. Raising it to 8192 with --auto-truncate was tried on the theory
+    # that 40 candidates in one request would beat five round trips — a batch of
+    # 8 had cost almost the same as a batch of 1 (1986 ms vs 2157 ms), which
+    # looks like fixed per-request overhead.
+    #
+    # Refuted: 40 docs went 7374 ms -> 19422 ms, and even a batch of 8 got worse
+    # (1986 -> 2947 ms). TEI logs `forcing max_batch_requests=8`, so it processes
+    # 8 pairs at a time regardless of the ceiling; the only effect of the larger
+    # value was padding each batch to a longer sequence. The cost is per-token
+    # compute, not per-request overhead.
+    #
+    # The lever that works is MEMORY_RERANK_TOP_K: rerank FEWER candidates.
+    command: ["--model-id", "BAAI/bge-reranker-base", "--max-batch-tokens", "8192"]
+    # TEI allocates its maximum batch shape at warmup, so this is a memory dial.
+    # This host has already lost a container to the OOM killer; a reranker that
+    # dies falls back to RRF ordering, but one that takes the host with it does
+    # not. The ceiling is explicit.
+    mem_limit: 6g
     volumes:
       - hfcache:/data
     ports: ["8091:80"]

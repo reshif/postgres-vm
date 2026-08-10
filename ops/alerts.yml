@@ -1,0 +1,79 @@
+# Alert rules drawn from the production gate in 04-EVALUATION.md §7.3 and the
+# ADR-0015 curation thresholds. Every rule here corresponds to a number the
+# blueprint already committed to — none were invented to fill a dashboard.
+groups:
+  - name: memory-platform
+    rules:
+      # §7.3: p95 memory.context < 350 ms for 7 days.
+      - alert: ContextPackSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(memory_context_duration_seconds_bucket[10m]))
+          ) > 0.35
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "p95 context pack latency over the 350 ms production gate"
+          description: "The gate is a 7-day sustained figure; this fires early so it is fixable before the window is spent."
+
+      # ADR-0008: degrading to the lexical arm is correct behaviour, but a
+      # sustained rate means the embedder is down, not blipping.
+      - alert: PacksDegraded
+        expr: rate(memory_pack_degraded_total[10m]) > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Context packs are being built without the vector arm"
+          description: "Retrieval is falling back to lexical. Check the embedding provider."
+
+      # ADR-0015: alert at depth 100. The failure mode is nobody noticing.
+      - alert: ReviewBacklogGrowing
+        expr: memory_inbox_depth > 100
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "Review inbox past the ADR-0015 alert threshold"
+          description: "Extraction auto-disables at 200 sustained for 14 days."
+
+      # The kill switch having fired is not itself a fault — but it must never
+      # be discovered a month later.
+      - alert: ExtractionDisabledByKillSwitch
+        expr: memory_extraction_enabled == 0
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "LLM extraction is disabled for a project"
+          description: "The ADR-0015 kill switch has fired, or extraction was turned off. It re-arms on the first day the backlog drops below threshold."
+
+      # Both ends of the 30-85% band are failures: below, the extractor is
+      # generating cleanup work; above, review has become a formality.
+      - alert: ExtractionAcceptanceOutOfBand
+        expr: memory_extraction_acceptance_rate < 0.30 or memory_extraction_acceptance_rate > 0.85
+        for: 6h
+        labels: { severity: info }
+        annotations:
+          summary: "Extraction acceptance rate outside the 30-85% band"
+
+      # Suite 2 is zero-tolerance. Denials counting up is the system working;
+      # a sudden burst is someone probing.
+      - alert: ScopeDenialBurst
+        expr: sum(rate(memory_scope_denied_total[5m])) > 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Unusual rate of scope or auth denials"
+
+      - alert: WritesRefusedByBackpressure
+        expr: rate(memory_backpressure_total[10m]) > 0
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Admission control is refusing writes"
+
+      - alert: TargetDown
+        expr: up == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Prometheus target {{ $labels.job }} is down"

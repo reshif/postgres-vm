@@ -33,6 +33,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -217,6 +218,7 @@ def detect(
 
 def unresolved(
     conn: Connection, *, tenant_id: UUID, project_id: UUID, limit: int = 10,
+    as_of: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Open conflicts, rendered for the pack's `contested` section.
 
@@ -232,10 +234,17 @@ def unresolved(
              "  FROM mem.conflicts c "
              "  JOIN mem.memories a ON a.id = c.memory_a "
              "  JOIN mem.memories b ON b.id = c.memory_b "
-             " WHERE c.tenant_id = :t AND c.resolution IS NULL "
-             "   AND a.status = 'active' AND b.status = 'active' "
+             " WHERE c.tenant_id = :t AND c.project_id = :p "
+              "   AND (CAST(:as_of AS timestamptz) IS NOT NULL AND c.detected_at <= CAST(:as_of AS timestamptz) "
+             "        AND (c.resolved_at IS NULL OR c.resolved_at > CAST(:as_of AS timestamptz)) "
+             "        AND a.valid_at @> CAST(:as_of AS timestamptz) "
+             "        AND b.valid_at @> CAST(:as_of AS timestamptz) "
+             "        AND a.recorded_at <= CAST(:as_of AS timestamptz) "
+             "        AND b.recorded_at <= CAST(:as_of AS timestamptz) "
+             "      OR :as_of IS NULL AND c.resolution IS NULL "
+             "        AND a.status = 'active' AND b.status = 'active') "
              " ORDER BY c.detected_at DESC LIMIT :k"),
-        {"t": str(tenant_id), "k": limit},
+        {"t": str(tenant_id), "p": str(project_id), "k": limit, "as_of": as_of},
     ).mappings().all()
 
     out = []

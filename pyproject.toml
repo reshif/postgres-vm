@@ -20,6 +20,22 @@ dependencies = [
   # algorithms — without it PyJWT can only do HMAC, which would force the
   # shared-secret model this design specifically avoids.
   "pyjwt[crypto]>=2.9",
+  # Tracing. OTEL_EXPORTER_OTLP_ENDPOINT has been set in docker-compose since
+  # the first commit and the collector, Tempo and Grafana have all been running
+  # — but nothing was ever installed to emit a span, so the traces pipeline
+  # carried zero bytes and Tempo was permanently empty. An endpoint variable is
+  # not instrumentation.
+  #
+  # The three instrumentations are chosen for what a slow context pack actually
+  # decomposes into: FastAPI gives the request span, psycopg gives the
+  # retrieval SQL, httpx gives the embedder and cross-encoder calls. Those are
+  # the three places latency hides, and a trace missing any of them cannot
+  # answer "why was that pack slow".
+  "opentelemetry-sdk>=1.28",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.28",
+  "opentelemetry-instrumentation-fastapi>=0.49b0",
+  "opentelemetry-instrumentation-httpx>=0.49b0",
+  "opentelemetry-instrumentation-psycopg>=0.49b0",
 ]
 
 [project.scripts]

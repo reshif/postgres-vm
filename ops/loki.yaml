@@ -1,0 +1,97 @@
+# Loki — single-binary, filesystem-backed. Sized for one host, not a fleet.
+#
+# The whole logs pipeline was previously a placeholder: the OTel collector had a
+# logs pipeline whose only exporter was `debug`, which prints a summary line and
+# discards the payload. Grafana had no logs datasource. So "logs" existed as a
+# word in the config and nowhere else.
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9096
+  log_level: warn
+
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: /loki
+  storage:
+    filesystem:
+      chunks_directory: /loki/chunks
+      rules_directory: /loki/rules
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2024-04-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+
+limits_config:
+  # Docker timestamps and application timestamps drift, and a container that
+  # starts up replaying an old file would otherwise have its lines rejected.
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  # Structured metadata is how OTLP trace_id/span_id ride along on a log line
+  # without becoming label cardinality. It is what makes "jump from this trace to
+  # its logs" work in Grafana.
+  allow_structured_metadata: true
+
+  # OTLP ATTRIBUTE MAPPING. Without this block Loki promoted every OTLP attribute
+  # to a LABEL, and the first captured line proved how bad that is:
+  #
+  #   {code_file_path="<string>", code_line_number="12",
+  #    observed_timestamp="1786385616272095529", ...}
+  #
+  # `observed_timestamp` as a label means a brand-new stream for every single log
+  # line. That is the classic way to destroy a Loki install — unbounded active
+  # streams, index blowup, and eventually refused writes. It would not have shown
+  # up in testing, only under sustained volume.
+  #
+  # So: a deliberately tiny label set, everything else as structured metadata,
+  # which is queryable and filterable but not indexed. Trace and span ids land
+  # there automatically, which is also what fixes trace<->log correlation.
+  otlp_config:
+    resource_attributes:
+      # Do not inherit Loki's default promotion list; name the labels explicitly.
+      ignore_defaults: true
+      attributes_config:
+        - action: index_label
+          attributes:
+            - service.name
+            - service.namespace
+    scope_attributes:
+      - action: structured_metadata
+        regex: ".*"
+    log_attributes:
+      - action: structured_metadata
+        regex: ".*"
+
+  # A cheap backstop for the same failure: even a config mistake cannot push
+  # active streams past this, so a bad label is a rejected write with a clear
+  # error rather than a slow, silent collapse.
+  max_label_names_per_series: 15
+  max_global_streams_per_user: 5000
+  volume_enabled: true
+  # One noisy debug loop must not be able to evict everything else.
+  ingestion_rate_mb: 16
+  ingestion_burst_size_mb: 32
+  max_query_series: 5000
+
+compactor:
+  working_directory: /loki/compactor
+  delete_request_store: filesystem
+  retention_enabled: true
+
+table_manager:
+  retention_deletes_enabled: true
+  # 30 days. Deliberately longer than Tempo's 48h trace retention: traces are for
+  # debugging something happening now, logs are what you read to reconstruct an
+  # incident three weeks later.
+  retention_period: 720h

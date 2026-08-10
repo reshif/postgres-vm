@@ -58,14 +58,28 @@ class EmbeddingProvider(Protocol):
 
 
 def _post(url: str, payload: dict, timeout: float) -> object:
-    req = urllib.request.Request(
-        url, data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.load(r)
-    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-        raise EmbeddingUnavailable(f"{url}: {exc}") from exc
+    # Traced explicitly. This call goes out over urllib, not httpx, so the httpx
+    # auto-instrumentation does not see it — and it is typically the single
+    # largest span in a context pack. A trace of a 780 ms pack that accounts for
+    # 30 ms of SQL and nothing else sends you looking at the database, which is
+    # the one place the time is not going.
+    from .telemetry import tracer
+
+    with tracer("memory.embeddings").start_as_current_span("embed.http") as span:
+        try:
+            span.set_attribute("http.url", url)
+            span.set_attribute("embed.batch_size", len(payload.get("input", []) or []))
+        except Exception:  # noqa: BLE001 - a no-op span has no set_attribute
+            pass
+        req = urllib.request.Request(
+            url, data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.load(r)
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+            raise EmbeddingUnavailable(f"{url}: {exc}") from exc
 
 
 def _finalise(vectors: list[list[float]], expected: int, source: str) -> list[list[float]]:

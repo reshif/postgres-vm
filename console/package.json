@@ -1,0 +1,32 @@
+{
+  "name": "memory-platform-console",
+  "private": true,
+  "version": "0.2.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && node scripts/csp-hashes.mjs",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.66.9",
+    "@tanstack/react-table": "8.21.3",
+    "@tanstack/react-virtual": "3.13.12",
+    "@visx/scale": "3.12.0",
+    "graphology": "0.26.0",
+    "lucide-react": "0.468.0",
+    "next": "16.3.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0",
+    "sigma": "3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "@types/react": "19.0.3",
+    "@types/react-dom": "19.0.2",
+    "autoprefixer": "10.4.20",
+    "postcss": "8.5.26",
+    "tailwindcss": "3.4.17",
+    "typescript": "5.7.2"
+  }
+}

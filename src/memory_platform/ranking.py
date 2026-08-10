@@ -89,13 +89,36 @@ def entity_overlap(identifiers: str, task_terms: set[str]) -> float:
     return hit / len(task_terms)
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    num = sum(x * y for x, y in zip(a, b))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    return num / (na * nb) if na and nb else 0.0
+def _pairwise_cosines(
+    ranked: list[dict[str, Any]], vectors: dict[Any, list[float]],
+) -> dict[tuple[int, int], float]:
+    """Calculate each candidate-pair similarity once for MMR.
+
+    The original MMR loop recomputed the same digest cosine every time another
+    candidate was selected. For a 60-candidate pack that is tens of thousands of
+    1024-dimensional dot products, even though only 1,770 distinct pairs exist.
+    The cache keeps MMR's selection and duplicate threshold exactly the same; it
+    removes only repeated arithmetic from the hot path.
+    """
+    prepared: list[tuple[list[float], float]] = []
+    for candidate in ranked:
+        vector = vectors.get(candidate["id"], [])
+        norm = math.sqrt(sum(value * value for value in vector)) if vector else 0.0
+        prepared.append((vector, norm))
+
+    similarities: dict[tuple[int, int], float] = {}
+    for left, (left_vector, left_norm) in enumerate(prepared):
+        if not left_norm:
+            continue
+        for right in range(left + 1, len(prepared)):
+            right_vector, right_norm = prepared[right]
+            if not right_norm or len(left_vector) != len(right_vector):
+                continue
+            similarities[(left, right)] = (
+                sum(a * b for a, b in zip(left_vector, right_vector)) /
+                (left_norm * right_norm)
+            )
+    return similarities
 
 
 def rerank(
@@ -242,6 +265,15 @@ def mmr_dedup(
     vectors = vectors or {}
     lam = float(weights.get("mmr_lambda", 0.7))
     dup_at = float(weights.get("dedup_cosine", 0.94))
+    original_index = {id(candidate): index for index, candidate in enumerate(ranked)}
+    similarities = _pairwise_cosines(ranked, vectors)
+
+    def similarity(left: dict[str, Any], right: dict[str, Any]) -> float:
+        left_index = original_index[id(left)]
+        right_index = original_index[id(right)]
+        if left_index > right_index:
+            left_index, right_index = right_index, left_index
+        return similarities.get((left_index, right_index), 0.0)
 
     kept: list[dict[str, Any]] = []
     dropped: list[dict[str, Any]] = []
@@ -250,21 +282,18 @@ def mmr_dedup(
     while pool:
         best_i, best_val = 0, None
         for i, cand in enumerate(pool):
-            cv = vectors.get(cand["id"])
-            sim = max((_cosine(cv, vectors.get(k["id"], [])) for k in kept), default=0.0) if cv else 0.0
+            sim = max((similarity(cand, prior) for prior in kept), default=0.0)
             val = lam * cand["score"] - (1 - lam) * sim
             if best_val is None or val > best_val:
                 best_i, best_val = i, val
 
         chosen = pool.pop(best_i)
-        cv = vectors.get(chosen["id"])
 
         collapsed_into = None
-        if cv:
-            for k in kept:
-                if _cosine(cv, vectors.get(k["id"], [])) >= dup_at:
-                    collapsed_into = k
-                    break
+        for k in kept:
+            if similarity(chosen, k) >= dup_at:
+                collapsed_into = k
+                break
         if collapsed_into is not None:
             collapsed_into.setdefault("also_seen_in", []).append(str(chosen["id"]))
             chosen["dropped_reason"] = (

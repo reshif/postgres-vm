@@ -117,6 +117,29 @@ def main() -> None:
     check("a well-used memory outranks an identical unused one",
           out["b"]["score"] > out["a"]["score"])
 
+    print("\n3b. MMR diversity and deduplication")
+    mmr_ranked = [
+        {"id": "a", "score": 1.0},
+        {"id": "b", "score": 0.95},
+        {"id": "c", "score": 0.8},
+    ]
+    mmr_vectors = {
+        "a": [1.0, 0.0],
+        "b": [0.999, 0.001],
+        "c": [0.0, 1.0],
+    }
+    mmr_kept, mmr_dropped = ranking.mmr_dedup(
+        mmr_ranked,
+        weights={"mmr_lambda": 0.7, "dedup_cosine": 0.94},
+        vectors=mmr_vectors,
+    )
+    check("MMR selects the diverse candidate before a near-duplicate",
+          [item["id"] for item in mmr_kept] == ["a", "c"],
+          str([item["id"] for item in mmr_kept]))
+    check("MMR keeps the duplicate explanation",
+          len(mmr_dropped) == 1 and mmr_dropped[0]["id"] == "b"
+          and mmr_kept[0].get("also_seen_in") == ["b"], str(mmr_dropped))
+
     # ---- 4. the pack --------------------------------------------------------
     print("\n4. Context pack")
     with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
@@ -240,7 +263,7 @@ def main() -> None:
         memories.write_memory(
             c, tenant_id=TENANT, project_id=PROJECT, principal_id=PRINCIPAL,
             mtype="observation", title="LLM guessed the deploy steps",
-            content=f"An agent inferred the deploy procedure from a README. Run {RUN}.",
+            content=f"An agent inferred the API deploy procedure from a README. Run {RUN}.",
             source_type="agent", memory_key=f"ctx-inferred-{RUN}")
         plain = context.build_pack(c, "how do I deploy the api", tenant_id=TENANT,
                                    project_id=PROJECT, principal_id=PRINCIPAL)

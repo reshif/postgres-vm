@@ -8,12 +8,28 @@
 #   * turns off anonymous Grafana
 #   * raises pool sizes and worker counts
 #   * pins Postgres to a managed/replicated instance if you have one
+#
+# `ports: !reset []`, NOT `ports: []`.
+#
+# This overlay used the latter and it silently did nothing. Compose merges list
+# fields, and an empty list is indistinguishable from "no opinion" — so every
+# `ports: []` here was a comment with YAML syntax, and `docker compose config`
+# on the merged files showed postgres still publishing 5432, Grafana still on
+# 3001. The overlay's headline claim was false for every service it named, and
+# nothing warned, because there is no error to raise: the file parsed, merged,
+# and meant nothing.
+#
+# `!reset` (Compose spec 2.24+) is the tag that actually removes an inherited
+# value. Verify rather than trust:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml config \
+#     | grep -A2 'published'
 # =============================================================================
 
 services:
 
   postgres:
-    ports: []
+    ports: !reset []
     command:
       - postgres
       - -c=shared_buffers=8GB
@@ -32,7 +48,7 @@ services:
     # MEMORY_DATABASE_URL_DIRECT and the pgbouncer DB_HOST at the endpoint.
 
   pgbouncer:
-    ports: []
+    ports: !reset []
     environment:
       DEFAULT_POOL_SIZE: "50"
       MIN_POOL_SIZE: "10"
@@ -43,11 +59,29 @@ services:
       # depends on transaction pooling for SET LOCAL scope hygiene.
 
   embeddings:
-    ports: []
+    ports: !reset []
 
   console:
     environment:
       NEXT_PUBLIC_API_URL: ${PUBLIC_API_URL:?set for prod}
+
+  # Prometheus and Tempo are published in dev so `/targets` and a trace id are
+  # one click away. Neither ships with any authentication whatsoever, and their
+  # contents are not innocuous: Prometheus labels carry project slugs and
+  # memory counts, and traces carry query text. Exposed on a shared network they
+  # are a data leak that looks like a debugging convenience.
+  #
+  # Grafana is the only intended way in, and the block below puts OAuth on it.
+  prometheus:
+    ports: !reset []
+
+  tempo:
+    ports: !reset []
+
+  # Alertmanager's UI has no authentication and its API can create silences —
+  # anyone who can reach it can mute an alert. Grafana is the front door.
+  alertmanager:
+    ports: !reset []
 
   grafana:
     environment:
@@ -56,7 +90,7 @@ services:
       GF_AUTH_GENERIC_OAUTH_CLIENT_ID: ${GRAFANA_OAUTH_CLIENT_ID:?}
       GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: ${GRAFANA_OAUTH_CLIENT_SECRET:?}
       GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:?}
-    ports: []
+    ports: !reset []
 
   # Scale explicitly rather than relying on deploy.replicas (Swarm-only):
   #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --scale worker=4

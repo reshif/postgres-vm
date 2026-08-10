@@ -30,11 +30,16 @@ no partial state.
 """
 from __future__ import annotations
 
+import io
 import logging
+import re
 import subprocess
+import tarfile
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from uuid import UUID
 
 from sqlalchemy import text
@@ -107,25 +112,99 @@ def parse_frontmatter(raw: str) -> tuple[dict[str, Any], str]:
     return meta, body.lstrip("\n")
 
 
-def git_sha(repo: Path, rel: str) -> str | None:
+_COMMIT = re.compile(r"^[0-9a-fA-F]{7,64}$")
+
+
+class CommitSnapshotError(RuntimeError):
+    """The requested commit cannot safely supply a Plane A snapshot."""
+
+
+def git_sha(repo: Path, rel: str, *, ref: str | None = None) -> str | None:
     """Commit that last touched this file — the exact commit Phase 1 acceptance
     asks provenance to resolve to, not merely current HEAD."""
     try:
-        out = subprocess.run(
+        args = [
             # -c safe.directory: a bind-mounted checkout is owned by the host
             # user, not the container user, so git refuses it with "detected
             # dubious ownership" and returns nothing. Provenance then silently
             # becomes NULL for every file — the failure is invisible in the data.
             # Scoped to this one invocation rather than written into global git
             # config, so it cannot loosen the check for anything else.
-            ["git", "-c", f"safe.directory={repo}", "-C", str(repo),
-             "log", "-1", "--format=%H", "--", rel],
+            "git", "-c", f"safe.directory={repo}", "-C", str(repo),
+            "log", "-1", "--format=%H",
+        ]
+        if ref:
+            args.append(ref)
+        args.extend(["--", rel])
+        out = subprocess.run(
+            args,
             capture_output=True, text=True, timeout=15, check=False,
         )
         return (out.stdout.strip() or None) if out.returncode == 0 else None
     except (OSError, subprocess.SubprocessError) as exc:
         log.warning("git sha unavailable for %s: %s", rel, exc)
         return None
+
+
+@contextmanager
+def commit_snapshot(repo_root: Path, sha: str) -> Iterator[Path]:
+    """Yield a read-only-style work tree containing `.memory` at one commit.
+
+    A queue can lag behind a push. Reading the live checkout at that point would
+    record a later document under the older webhook SHA, which corrupts Plane A
+    provenance. `git archive` gives the task exactly the named tree without a
+    checkout, reset, or fetch that could touch an operator's working copy.
+    """
+    if not _COMMIT.fullmatch(sha):
+        raise CommitSnapshotError("commit SHA must be 7-64 hexadecimal characters")
+    try:
+        verified = subprocess.run(
+            ["git", "-c", f"safe.directory={repo_root}", "-C", str(repo_root),
+             "rev-parse", "--verify", f"{sha}^{{commit}}"],
+            capture_output=True, text=True, timeout=15, check=False,
+        )
+        if verified.returncode != 0:
+            raise CommitSnapshotError(f"commit {sha} is not available in {repo_root}")
+        resolved_sha = verified.stdout.strip()
+        archive = subprocess.run(
+            ["git", "-c", f"safe.directory={repo_root}", "-C", str(repo_root),
+             "archive", "--format=tar", resolved_sha, ".memory"],
+            capture_output=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CommitSnapshotError(f"could not archive commit {sha}: {exc}") from exc
+    if archive.returncode != 0 or not archive.stdout:
+        detail = archive.stderr.decode("utf-8", "replace").strip()
+        raise CommitSnapshotError(
+            f"commit {resolved_sha} has no readable .memory tree" +
+            (f": {detail}" if detail else "")
+        )
+
+    with tempfile.TemporaryDirectory(prefix="memory-commit-") as directory:
+        root = Path(directory)
+        try:
+            with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as tar:
+                for member in tar.getmembers():
+                    target = Path(member.name)
+                    if (target.is_absolute() or ".." in target.parts
+                            or target.parts[:1] != (".memory",)):
+                        raise CommitSnapshotError("git archive contained an unsafe .memory path")
+                    destination = root / target
+                    if member.isdir():
+                        destination.mkdir(parents=True, exist_ok=True)
+                        continue
+                    if not member.isfile():
+                        raise CommitSnapshotError("git archive contained a non-file .memory path")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    with tar.extractfile(member) as source:
+                        if source is None:
+                            raise CommitSnapshotError("git archive contained an unreadable file")
+                        destination.write_bytes(source.read())
+        except (tarfile.TarError, OSError) as exc:
+            raise CommitSnapshotError(f"could not extract commit {resolved_sha}: {exc}") from exc
+        if not (root / ".memory").is_dir():
+            raise CommitSnapshotError(f"commit {resolved_sha} has no .memory directory")
+        yield root
 
 
 def classify(rel_path: Path) -> str | None:
@@ -155,6 +234,8 @@ def ingest_tree(
     project_id: UUID,
     principal_id: UUID | None = None,
     memory_dir: str = ".memory",
+    provenance_repo: Path | None = None,
+    source_ref: str | None = None,
 ) -> IngestReport:
     """Walk `.memory/` and reconcile it into the database."""
     report = IngestReport()
@@ -209,7 +290,7 @@ def ingest_tree(
 
         key = f"{memory_dir}:{rel.as_posix()}"
         seen_keys.add(key)
-        sha = git_sha(repo_root, rel_str)
+        sha = git_sha(provenance_repo or repo_root, rel_str, ref=source_ref)
 
         result = memories.write_memory(
             conn,

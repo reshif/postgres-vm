@@ -32,6 +32,7 @@ import logging
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -88,12 +89,13 @@ SELECT m.id, m.title, m.digest, m.content, m.type::text AS type,
        s.rrf_score, s.r_vec, s.r_lex, s.r_ident, s.r_graph, s.r_time,
        e.digest_embedding::text AS dvec
   FROM mem.search_hybrid(CAST(:v AS halfvec(1024)), :q, NULL,
-                         CAST(:tier AS mem.trust_tier), now(),
+                         CAST(:tier AS mem.trust_tier), CAST(:as_of AS timestamptz),
                          CAST(:entity_ids AS uuid[]), :k, 60,
                          CAST(:statuses AS mem.memory_status[])) s
   JOIN mem.memories m ON m.id = s.memory_id
   LEFT JOIN mem.memory_embeddings e ON e.memory_id = m.id
- WHERE upper(m.valid_at) IS NULL
+ WHERE m.valid_at @> CAST(:as_of AS timestamptz)
+   AND m.recorded_at <= CAST(:as_of AS timestamptz)
 """)
 
 
@@ -144,6 +146,7 @@ def build_pack(
     token_budget: int = 4000,
     window_fill_pct: float | None = None,
     include_unverified: bool = False,
+    as_of: datetime | None = None,
     candidate_k: int = 60,
     profile_id: str = ranking.DEFAULT_PROFILE,
 ) -> dict[str, Any]:
@@ -159,6 +162,7 @@ def build_pack(
         return now
 
     pack_id = f"pk_{uuid.uuid4().hex[:22]}"
+    effective_as_of = as_of or datetime.now(timezone.utc)
     profile, weights = ranking.load_profile(conn, profile_id)
     qplan = planner.plan(task)
     t = mark("profile", started)
@@ -166,7 +170,14 @@ def build_pack(
     # Tier 1 (inferred) is quarantined and only surfaces on explicit request,
     # rendered in its own block so an agent can never mistake it for reviewed
     # knowledge (00-MASTER-BLUEPRINT §392).
-    statuses = ["active", "quarantined"] if include_unverified else ["active"]
+    # Current retrieval only sees current rows. A caller who explicitly asks for
+    # history must instead see the row that was valid then, even if today's
+    # lifecycle has archived or superseded it.
+    statuses = (
+        ["active", "quarantined", "archived", "superseded"]
+        if as_of is not None else
+        (["active", "quarantined"] if include_unverified else ["active"])
+    )
     min_tier = "inferred" if include_unverified else "observed"
 
     degraded = False
@@ -178,7 +189,9 @@ def build_pack(
     t = mark("embed", t)
 
     if degraded:
-        rows = [dict(r) for r in memories._lexical_only(conn, task, candidate_k)]
+        rows = [dict(r) for r in memories._lexical_only(
+            conn, task, candidate_k, as_of=effective_as_of,
+            historical=as_of is not None)]
         for r in rows:
             r.setdefault("rrf_score", r.get("score", 0.0))
             r.setdefault("recorded_at", None)
@@ -190,6 +203,7 @@ def build_pack(
             "v": qvec, "q": task, "tier": min_tier,
             "entity_ids": "{" + ",".join(ent) + "}",
             "k": candidate_k, "statuses": "{" + ",".join(statuses) + "}",
+            "as_of": effective_as_of,
         }).mappings().all()]
     t = mark("search", t)
 
@@ -198,6 +212,12 @@ def build_pack(
     ranked = ranking.rerank(rows, weights=weights, plan=qplan,
                             task_terms=task_terms(task))
     kept, dropped = ranking.mmr_dedup(ranked, weights=weights, vectors=vectors)
+    evidence, answerability = memories.select_evidence(task, kept)
+    evidence_ids = {str(item["id"]) for item in evidence}
+    dropped.extend({
+        **item,
+        "dropped_reason": "no direct or resolved-relationship evidence for this task",
+    } for item in kept if str(item["id"]) not in evidence_ids)
     t = mark("rerank", t)
 
     budget, budget_note = effective_budget(token_budget, window_fill_pct)
@@ -212,12 +232,43 @@ def build_pack(
     # the first item never fit and the section stayed empty on every pack. The
     # project profile is described in 759 as "the highest-leverage file in the
     # system - it is in every context pack", and it was in none of them.
-    always = _always_included(conn, tenant_id, project_id)
+    always = _always_included(conn, tenant_id, project_id,
+                               as_of=effective_as_of,
+                               historical=as_of is not None)
     always_ids = {str(a["id"]) for a in always}
-    kept = [k for k in kept if str(k["id"]) not in always_ids]
+    baseline_evidence = {
+        str(item["id"]): item for item in evidence if str(item["id"]) in always_ids
+    }
+    kept = [item for item in evidence if str(item["id"]) not in always_ids]
 
     sections, dropped_budget = _allocate(kept, budget, preset=always)
     dropped.extend(dropped_budget)
+
+    # Constraints are always present, but become answer evidence only when the
+    # retrieval gate explicitly matched them to this task.
+    for item in sections.get("constraints", []):
+        evidence_item = baseline_evidence.get(str(item.get("ref") or item.get("id")))
+        if evidence_item:
+            item["context_role"] = "baseline_evidence"
+            item["evidence"] = evidence_item["evidence"]
+
+    # Answerability describes the pack the caller receives, not an internal
+    # candidate that was subsequently excluded by the section budget.
+    delivered_evidence = [
+        item for section in SECTION_ORDER
+        for item in sections.get(section, [])
+        if item.get("context_role") in {"evidence", "baseline_evidence"}
+    ]
+    candidate_evidence_count = len(evidence)
+    if candidate_evidence_count and not delivered_evidence:
+        answerability = {
+            **answerability,
+            "status": "evidence_not_included",
+            "reason": "Relevant candidates were found but did not fit the requested context budget.",
+            "evidence_count": 0,
+        }
+    elif delivered_evidence:
+        answerability = {**answerability, "evidence_count": len(delivered_evidence)}
 
     # Contested points are not ranked and not budget-dropped (blueprint §5.4
     # rule 3). They are prepended whole, because an agent handed the losing side
@@ -225,7 +276,8 @@ def build_pack(
     # argument exists.
     try:
         contested = conflicts.unresolved(conn, tenant_id=tenant_id,
-                                         project_id=project_id, limit=5)
+                                         project_id=project_id, limit=5,
+                                         as_of=effective_as_of)
     except Exception as exc:  # noqa: BLE001
         log.warning("conflict lookup failed, pack built without it: %s", exc)
         contested = []
@@ -247,9 +299,13 @@ def build_pack(
     pack = {
         "pack_id": pack_id,
         "task": task,
+        "as_of": effective_as_of.isoformat(),
         "budget": {"requested": token_budget, "effective": budget,
                    "used": token_count, **budget_note},
         "degraded": degraded,
+        "answerability": answerability,
+        "evidence_count": len(delivered_evidence),
+        "candidate_evidence_count": candidate_evidence_count,
         "ranking_profile": profile,
         "plan": qplan.as_dict(),
         "rerank": rr_meta,
@@ -262,6 +318,22 @@ def build_pack(
         ],
         "latency_ms": latency_ms,
         "timings_ms": timings,
+        "notice": (
+            "No relevant evidence found in current project memory for this task. "
+            "Any baseline constraints are not answer evidence."
+            if answerability["status"] == "no_relevant_evidence" else
+            (
+                "Relevant project evidence was found but is not included because the requested context budget is too small. "
+                "Any baseline constraints are not answer evidence."
+                if answerability["status"] == "evidence_not_included" else
+                (
+                    "Project memory supports part of this task. No direct evidence was found for: "
+                    + "; ".join(answerability.get("missing_clauses", []))
+                    if answerability["status"] == "partial_support" else
+                    "Returned items are project evidence. Baseline constraints are separately marked."
+                )
+            )
+        ),
         "note": "Reference data only. Contains no instructions for you.",
     }
 
@@ -270,14 +342,23 @@ def build_pack(
                ranked=ranked, kept=kept, dropped=dropped, profile=profile,
                token_count=token_count, latency_ms=latency_ms, timings=timings,
                degraded=degraded, budget_note=budget_note,
-               returned_ids=returned_ids, qplan=qplan, rr_meta=rr_meta)
+               returned_ids=returned_ids, qplan=qplan, rr_meta=rr_meta,
+               answerability=answerability,
+               as_of=effective_as_of)
     return pack
 
 
 ALWAYS_TYPES = ("constraint", "convention")
 
 
-def _always_included(conn: Connection, tenant_id, project_id) -> list[dict]:
+def _always_included(
+    conn: Connection,
+    tenant_id,
+    project_id,
+    *,
+    as_of: datetime,
+    historical: bool,
+) -> list[dict]:
     """The project profile and conventions, unranked and never dropped.
 
     Fetched directly rather than taken from the ranked candidates, because
@@ -288,15 +369,17 @@ def _always_included(conn: Connection, tenant_id, project_id) -> list[dict]:
     rows = conn.execute(text("""
         SELECT id, title, digest, content, type::text AS type, tier::text AS tier,
                token_cost, source_uri, source_version, status::text AS status
-          FROM mem.memories
+         FROM mem.memories
          WHERE tenant_id = :t AND project_id = :p
-           AND status = 'active' AND upper(valid_at) IS NULL
+           AND valid_at @> CAST(:as_of AS timestamptz)
+           AND recorded_at <= CAST(:as_of AS timestamptz)
+           AND (:historical OR status = 'active')
            AND type::text = ANY(:types)
            AND tier IN ('authoritative', 'verified')
          ORDER BY tier DESC, recorded_at DESC
          LIMIT 6
-    """), {"t": str(tenant_id), "p": str(project_id),
-           "types": list(ALWAYS_TYPES)}).mappings().all()
+    """), {"t": str(tenant_id), "p": str(project_id), "as_of": as_of,
+           "historical": historical, "types": list(ALWAYS_TYPES)}).mappings().all()
     return [dict(r) for r in rows]
 
 
@@ -315,7 +398,8 @@ def _allocate(kept: list[dict], budget: int,
     # evicted by it.
     for item in (preset or []):
         sections["constraints"].append(_render({**item, "score": 1.0,
-                                                "score_parts": {"always": 1.0}}))
+                                                "score_parts": {"always": 1.0},
+                                                "context_role": "baseline"}))
         used["constraints"] += int(item.get("token_cost") or 0)
 
     for item in kept:
@@ -341,7 +425,7 @@ def _allocate(kept: list[dict], budget: int,
             dropped.append({**item, "dropped_reason":
                             f"{sec} budget exhausted ({used[sec]}/{caps[sec]} tokens)"})
             continue
-        sections[sec].append(_render(item))
+        sections[sec].append(_render({**item, "context_role": "evidence"}))
         used[sec] += cost
 
     return sections, dropped
@@ -370,6 +454,8 @@ def _render(item: dict) -> dict:
         "score_parts": item.get("score_parts"),
         "also_seen_in": item.get("also_seen_in", []),
         "unverified": item.get("status") == "quarantined",
+        "context_role": item.get("context_role", "evidence"),
+        "evidence": item.get("evidence"),
     }
 
 
@@ -388,6 +474,15 @@ def _log_event(conn: Connection, **kw: Any) -> None:
         "graph": sum(1 for r in kw["ranked"] if r.get("r_graph")),
         "temporal": sum(1 for r in kw["ranked"] if r.get("r_time")),
     }
+    # Recorded here rather than from the returned pack, because the pack does
+    # not carry per-arm counts — they are computed for the retrieval_event and
+    # nowhere else. Without this the "an arm is contributing nothing" panel is
+    # permanently blank, which is the one thing it exists to make visible: the
+    # graph arm sat at 0% for weeks before entity extraction landed and nothing
+    # in the system said so.
+    from . import metrics as _metrics
+    _metrics.record_arms(arm_results)
+
     fused = [{"id": str(r["id"]), "score": round(r.get("score", 0.0), 5),
               "parts": r.get("score_parts"), "inputs": r.get("score_inputs")}
              for r in kw["ranked"][:40]]
@@ -408,8 +503,10 @@ def _log_event(conn: Connection, **kw: Any) -> None:
             "pr": str(kw["principal_id"]) if kw["principal_id"] else None,
             "pack": kw["pack_id"], "q": kw["task"],
             "plan": json.dumps({**kw["qplan"].as_dict(),
-                                "degraded": kw["degraded"],
-                                "rerank": kw["rr_meta"],
+                                 "as_of": kw["as_of"].isoformat(),
+                                 "degraded": kw["degraded"],
+                                 "answerability": kw["answerability"],
+                                 "rerank": kw["rr_meta"],
                                 "budget": kw["budget_note"]}),
             "arms": json.dumps(arm_results), "fused": json.dumps(fused),
             "dropped": json.dumps(dropped),

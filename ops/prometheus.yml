@@ -1,13 +1,77 @@
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+  external_labels:
+    stack: memory-platform
+
+rule_files:
+  - /etc/prometheus/recording-rules.yml
+  - /etc/prometheus/alerts.yml
+
+# Prometheus evaluates rules; Alertmanager notifies. Without this block the rules
+# transition to firing and stop there — no receiver, no grouping, no silences.
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
 
 scrape_configs:
+  # Spans and OTLP-delivered metrics, re-exported by the collector.
   - job_name: otel-collector
     static_configs:
       - targets: ["otel-collector:8889"]
 
+  # Request-time application metrics: pack latency and tokens, trust tiers on
+  # returned items, write latency, scope denials, rate limiting.
   - job_name: memory-api
     metrics_path: /metrics
     static_configs:
       - targets: ["api:8080"]
+
+  # Curation and backlog gauges. These live on the scheduler, not the API,
+  # because they are per-project aggregates and the API role is NOBYPASSRLS with
+  # no scope on a scrape — it cannot compute them without a connection that can
+  # read every tenant, which does not belong in the process serving callers.
+  - job_name: memory-scheduler
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["scheduler:9100"]
+
+  # The database is the single point of failure in this architecture: the queue,
+  # the vectors, the isolation model and the audit log all live in it. Leaving it
+  # unmonitored while charting application latency is watching the symptom.
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+
+  # Pool saturation presents as unexplained API latency with an idle database —
+  # a shape that is impossible to diagnose from either side alone.
+  - job_name: pgbouncer
+    static_configs:
+      - targets: ["pgbouncer-exporter:9127"]
+
+  # The observability stack has to be observable too. A silently dead collector
+  # or a Loki rejecting writes both present as "the dashboards look fine".
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+
+  - job_name: promtail
+    static_configs:
+      - targets: ["promtail:9080"]
+
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]
+
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]

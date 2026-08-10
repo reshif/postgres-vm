@@ -1,13 +1,68 @@
 apiVersion: 1
 
+# PIN THE uid. Without it Grafana generates one (`PBFA97CFB590B2093`), and a
+# provisioned dashboard that names its datasource — which every dashboard must —
+# refers to something that does not exist. Every panel then renders "No data"
+# with an error triangle, while the datasource itself is perfectly healthy and
+# answers queries fine when asked by its real uid.
+#
+# That is a nasty failure to diagnose, because each half tests green on its own:
+# the datasource works, the dashboards are provisioned, Prometheus has the data.
+# Only the reference between them is broken. Pinning the uid here is what makes
+# `"datasource": {"uid": "prometheus"}` in the dashboard JSON portable across
+# machines and rebuilds.
 datasources:
   - name: Prometheus
+    uid: prometheus
     type: prometheus
     access: proxy
     url: http://prometheus:9090
     isDefault: true
+    jsonData:
+      # Matches the 15s scrape interval in ops/prometheus.yml. Left unset,
+      # Grafana assumes 15s anyway but will not warn when the two drift.
+      timeInterval: 15s
 
   - name: Tempo
+    uid: tempo
     type: tempo
     access: proxy
     url: http://tempo:3200
+    jsonData:
+      # Jump from a slow trace straight to the metrics around it.
+      tracesToMetrics:
+        datasourceUid: prometheus
+      # ...and to the log lines written inside that trace. This is the payoff
+      # for exporting application logs over OTLP: the trace id travels with the
+      # log record as structured metadata, so this is an exact join rather than
+      # a timestamp-range guess.
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -2m
+        spanEndTimeShift: 2m
+        filterByTraceID: true
+        filterBySpanID: false
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # The reverse direction: a log line that carries a trace id becomes a link
+      # into Tempo. Without this the two stores stay side by side and correlating
+      # them is manual.
+      derivedFields:
+        - name: TraceID
+          datasourceUid: tempo
+          matcherType: label
+          matcherRegex: trace_id
+          url: "${__value.raw}"
+        # Fallback for logs that are plain text rather than OTLP — Postgres and
+        # nginx will never emit structured metadata, but a trace id pasted into
+        # a message is still worth linking.
+        - name: TraceIDInline
+          datasourceUid: tempo
+          matcherType: regex
+          matcherRegex: 'trace[_-]?id[=:"\s]+([a-f0-9]{32})'
+          url: "${__value.raw}"

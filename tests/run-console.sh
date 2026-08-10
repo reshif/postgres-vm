@@ -17,6 +17,17 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+# Docker Desktop is exposed as `docker.exe` in a WSL shell when the distro has
+# not enabled Docker integration. Git Bash and native Linux provide `docker`.
+if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
+  DOCKER=docker
+elif command -v docker.exe >/dev/null 2>&1 && docker.exe version >/dev/null 2>&1; then
+  DOCKER=docker.exe
+else
+  echo "Docker CLI is not available" >&2
+  exit 1
+fi
+
 # Git Bash on Windows rewrites anything that looks like a Unix path into a
 # Windows one before the argument reaches docker, which turns the container-side
 # `-w /tests` into `C:/.../tests` and fails with "needs to be an absolute path".
@@ -27,29 +38,34 @@ export MSYS2_ARG_CONV_EXCL='*'
 
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) HOST_TESTS="$(pwd -W)/tests" ;;
+  Linux*)               if [ "$DOCKER" = "docker.exe" ]; then
+                           HOST_TESTS="$(wslpath -w "$(pwd)/tests")"
+                         else
+                           HOST_TESTS="$(pwd)/tests"
+                         fi ;;
   *)                    HOST_TESTS="$(pwd)/tests" ;;
 esac
 
-NET="$(docker compose ps --format '{{.Name}}' api | head -1)"
+NET="$($DOCKER compose ps --format '{{.Name}}' api | head -1)"
 if [ -z "$NET" ]; then
   echo "api is not running — start the stack first: docker compose up -d" >&2
   exit 1
 fi
-if [ -z "$(docker compose ps --format '{{.Name}}' console | head -1)" ]; then
+if [ -z "$($DOCKER compose ps --format '{{.Name}}' console | head -1)" ]; then
   echo "console is not running — docker compose --profile console up -d --build console" >&2
   exit 1
 fi
 
-NETWORK="$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$NET")"
+NETWORK="$($DOCKER inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$NET")"
 
 # The playwright image ships the BROWSERS but not the `playwright` npm package,
 # so the client library is installed into /tmp at run time. The browsers already
 # present under /ms-playwright are reused — PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
 # stops npm from pulling several hundred megabytes of Chromium it already has.
 # A named volume caches the install so a rerun is seconds, not a fresh download.
-docker volume create memory-console-pw >/dev/null
+$DOCKER volume create memory-console-pw >/dev/null
 
-docker run --rm \
+$DOCKER run --rm \
   --network "$NETWORK" \
   -v "${HOST_TESTS}://tests:ro" \
   -v memory-console-pw://pw \

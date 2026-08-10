@@ -10,8 +10,9 @@ import asyncio
 import hashlib
 import logging
 import os
+import subprocess
 from pathlib import Path
-from uuid import UUID
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from procrastinate import App, PsycopgConnector
 from sqlalchemy import text
@@ -21,6 +22,12 @@ from .config import settings
 
 logging.basicConfig(level=settings().log_level.upper())
 log = logging.getLogger("memory.worker")
+
+# The worker and scheduler produce the logs an operator most often needs — poll
+# ingestion, maintenance sweeps, the ADR-0015 kill switch — and neither serves
+# HTTP, so nothing else here would ever have attached an exporter.
+from . import telemetry as _telemetry  # noqa: E402
+_telemetry.setup_logs()
 
 
 def _dsn() -> str:
@@ -48,7 +55,7 @@ async def embed_memory(tenant_id: str, project_id: str) -> None:
     from . import maintenance as _m
 
     def _run() -> dict:
-        with db.scoped(UUID(tenant_id), UUID(tenant_id), UUID(project_id)) as conn:
+        with db.scoped(UUID(tenant_id), UUID(tenant_id), UUID(project_id), direct=True) as conn:
             return _m.backfill_embeddings(conn, tenant_id=UUID(tenant_id),
                                           project_id=UUID(project_id))
 
@@ -57,7 +64,98 @@ async def embed_memory(tenant_id: str, project_id: str) -> None:
 
 @app.task(queue="ingestion", name="ingest_git_commit")
 async def ingest_git_commit(project_id: str, sha: str) -> None:
-    log.info("ingest_git_commit placeholder: %s %s", project_id, sha)
+    report = await asyncio.to_thread(_ingest_git_commit, project_id, sha)
+    log.info("ingest_git_commit %s@%s: %s", project_id, sha[:12], report)
+
+
+def _ingest_service_scope(project_id: UUID) -> tuple[UUID, UUID, str | None]:
+    """Resolve one registered project and an attributable worker principal.
+
+    The task receives an opaque project id from the queue, never a caller-supplied
+    tenant id. Looking up its tenant before setting scope avoids turning a stale
+    or malicious task payload into a cross-tenant write. The service principal
+    is deterministic per tenant, so database audit/version triggers always have
+    an actual actor rather than an invented UUID in their session GUC.
+    """
+    with db.engine_direct().begin() as conn:
+        project = conn.execute(text(
+            "SELECT tenant_id, repo_url FROM mem.projects WHERE id = :project"),
+            {"project": str(project_id)}).mappings().one_or_none()
+        if project is None:
+            raise LookupError(f"project {project_id} is not registered")
+        tenant_id = UUID(str(project["tenant_id"]))
+        principal_id = uuid5(NAMESPACE_URL, f"memory-platform:ingest:{tenant_id}")
+        principal_id = conn.execute(text(
+            "INSERT INTO mem.principals "
+            "  (id, tenant_id, actor, external_id, display_name) "
+            "VALUES (:id, :tenant, 'service', :external, 'Plane A ingestion worker') "
+            "ON CONFLICT (tenant_id, actor, external_id) DO UPDATE "
+            "  SET display_name = EXCLUDED.display_name "
+            "RETURNING id"),
+            {"id": str(principal_id), "tenant": str(tenant_id),
+             "external": "plane-a-ingestion"}).scalar_one()
+    return tenant_id, UUID(str(principal_id)), project["repo_url"]
+
+
+def _normalise_repo_url(url: str) -> str:
+    """Match the CLI binding's SSH/HTTPS-insensitive remote identity."""
+    import re
+
+    value = (url or "").strip().lower().rstrip("/")
+    value = re.sub(r"^(https?://|git\+ssh://|ssh://)", "", value)
+    value = re.sub(r"^git@", "", value)
+    if value.startswith(("github.com", "gitlab.com", "bitbucket.org")):
+        value = value.replace(":", "/", 1)
+    return re.sub(r"\.git$", "", value)
+
+
+def _assert_checkout_binding(repo_root: Path, registered_remote: str | None) -> None:
+    """Refuse to process a queue item using a checkout bound to another project."""
+    if not registered_remote:
+        return
+    try:
+        result = subprocess.run(
+            ["git", "-c", f"safe.directory={repo_root}", "-C", str(repo_root),
+             "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=15, check=False)
+    except OSError as exc:
+        raise RuntimeError(f"cannot inspect checkout remote: {exc}") from exc
+    actual = result.stdout.strip() if result.returncode == 0 else ""
+    if not actual or _normalise_repo_url(actual) != _normalise_repo_url(registered_remote):
+        raise PermissionError(
+            "checkout remote does not match the project registration; refusing "
+            f"to ingest {repo_root} for this task")
+
+
+def _ingest_git_commit(
+    project_id: str,
+    sha: str,
+    *,
+    repo_root: Path | None = None,
+) -> dict:
+    """Ingest the `.memory` tree as it existed at exactly ``sha``.
+
+    This synchronous core is intentionally separate from the Procrastinate
+    wrapper so it can be exercised against a temporary repository. It does not
+    alter the checkout and it does not use the scheduler's dev scope binding.
+    """
+    project = UUID(project_id)
+    root = (repo_root or Path(settings().ingest_repo_path)).resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"ingest checkout does not exist: {root}")
+    tenant, principal, registered_remote = _ingest_service_scope(project)
+    _assert_checkout_binding(root, registered_remote)
+    with ingest.commit_snapshot(root, sha) as snapshot:
+        with db.scoped(tenant, principal, project, direct=True) as conn:
+            report = ingest.ingest_tree(
+                conn, snapshot, tenant_id=tenant, project_id=project,
+                principal_id=principal, provenance_repo=root, source_ref=sha)
+    return {
+        **report.summary(), "created_files": report.created,
+        "archived_keys": report.archived,
+        "rejected": [{"path": path, "reason": reason}
+                     for path, reason in report.rejected],
+    }
 
 
 async def _run_worker() -> None:
@@ -144,7 +242,7 @@ def _poll_once(last: str) -> str:
     project = UUID(s.dev_project_id)
     principal = UUID(s.dev_principal_id) if s.dev_principal_id else None
 
-    with db.scoped(tenant, principal or tenant, project) as conn:
+    with db.scoped(tenant, principal or tenant, project, direct=True) as conn:
         report = ingest.ingest_tree(conn, root, tenant_id=tenant,
                                     project_id=project, principal_id=principal)
     summary = report.summary()
@@ -154,7 +252,7 @@ def _poll_once(last: str) -> str:
     # Maintenance runs after reconciliation, in its own transaction: conflict
     # detection should see the documents this pass just ingested, and a failure
     # in a sweep must not roll back the ingestion that succeeded.
-    with db.scoped(tenant, principal or tenant, project) as conn:
+    with db.scoped(tenant, principal or tenant, project, direct=True) as conn:
         stats = maintenance.run_all(conn, tenant_id=tenant, project_id=project)
     if any(v for k, v in stats.items() if v and v != {"archived": 0}):
         log.info("maintenance: %s", stats)
@@ -176,14 +274,35 @@ def _curation_sample() -> dict:
     been abandoned. Hanging the ADR-0015 kill switch off tree changes would mean
     the switch collects no evidence in exactly the case it exists to catch.
     """
-    from . import curation
+    from . import curation, metrics
 
     s = settings()
     tenant = UUID(s.dev_tenant_id)
     project = UUID(s.dev_project_id)
     principal = UUID(s.dev_principal_id) if s.dev_principal_id else None
-    with db.scoped(tenant, principal or tenant, project) as conn:
-        return curation.snapshot(conn, tenant_id=tenant, project_id=project)
+    with db.scoped(tenant, principal or tenant, project, direct=True) as conn:
+        stats = curation.snapshot(conn, tenant_id=tenant, project_id=project)
+
+        # Gauges are published from here rather than from the API because these
+        # are aggregates across a project, and the API runs as memory_app —
+        # NOBYPASSRLS, with no scope on a Prometheus scrape. It cannot compute
+        # them, and handing it a BYPASSRLS connection to make a dashboard work
+        # would put a read-every-tenant role inside the process that serves
+        # untrusted callers.
+        status = curation.status(conn, tenant_id=tenant, project_id=project)
+        counts = dict(conn.execute(text(
+            "SELECT status::text, count(*)::int FROM mem.memories "
+            " WHERE tenant_id = :t AND project_id = :p AND upper(valid_at) IS NULL "
+            " GROUP BY 1"), {"t": str(tenant), "p": str(project)}).all())
+        open_conflicts = conn.execute(text(
+            "SELECT count(*)::int FROM mem.conflicts "
+            " WHERE tenant_id = :t AND project_id = :p AND resolution IS NULL"),
+            {"t": str(tenant), "p": str(project)}).scalar_one()
+
+    slug = s.dev_project_id[:8]
+    metrics.publish_curation(slug, status, counts)
+    metrics.publish_conflicts(slug, open_conflicts)
+    return stats
 
 
 async def _run_scheduler() -> None:
@@ -210,6 +329,11 @@ async def _run_scheduler() -> None:
         await asyncio.to_thread(_ensure_bound_scope)
     except Exception as exc:  # noqa: BLE001
         log.exception("could not verify the bound project, ingestion will retry: %s", exc)
+
+    # The scheduler has no HTTP server of its own, so it starts a listener purely
+    # for Prometheus. ops/prometheus.yml scrapes scheduler:9100.
+    from . import metrics as _metrics
+    _metrics.serve(int(os.environ.get("MEMORY_METRICS_PORT", "9100")))
 
     log.info("scheduler: polling %s/.memory every %ss",
              s.ingest_repo_path, s.ingest_interval_s)

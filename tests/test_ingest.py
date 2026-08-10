@@ -24,7 +24,7 @@ from uuid import UUID
 from sqlalchemy import text
 
 sys.path.insert(0, "/app/src")
-from memory_platform import db, ingest, memories, secret_scan  # noqa: E402
+from memory_platform import db, ingest, memories, secret_scan, worker  # noqa: E402
 
 RUN = uuid.uuid4().hex[:8]
 TENANT = UUID("99999999-0000-0000-0000-000000000099")
@@ -199,6 +199,35 @@ def main() -> None:
                                "AND upper(valid_at) IS NULL"),
                           {"k": ".memory:decisions/ADR-0007.md"}).scalar_one()
         check("exactly one CURRENT version of the ADR", n == 1, f"{n} rows")
+
+        # ---- 5b. queued commit ingestion uses the named tree ----------------
+        # The checkout can advance before a webhook job is claimed. The task must
+        # archive the requested commit, not `git checkout` it or read whatever
+        # happens to be in the working tree by then.
+        print("\n5b. Queued commit ingestion is immutable")
+        snapshot_text = (
+            "# ADR-0008: Commit snapshots are immutable\n\n"
+            f"Workers ingest the exact archive named by a webhook. Run {RUN}.\n")
+        snapshot_path = repo / ".memory" / "decisions" / "ADR-0008.md"
+        snapshot_path.write_text(snapshot_text, encoding="utf-8")
+        git(repo, "add", "-A"); git(repo, "commit", "-m", "add snapshot ADR")
+        snapshot_sha = git(repo, "rev-parse", "HEAD")
+        queued = worker._ingest_git_commit(str(PROJ_A), snapshot_sha, repo_root=repo)
+        check("queued worker ingests the commit snapshot", queued["created"] == 1,
+              str(queued))
+        check("queued worker leaves the checkout at its original HEAD",
+              git(repo, "rev-parse", "HEAD") == snapshot_sha,
+              git(repo, "rev-parse", "HEAD")[:12])
+        with db.scoped(TENANT, PRIN, PROJ_A) as c:
+            snapshot = c.execute(text(
+                "SELECT content, source_version FROM mem.memories "
+                " WHERE memory_key = '.memory:decisions/ADR-0008.md' "
+                "   AND upper(valid_at) IS NULL")).mappings().one()
+        check("queued provenance resolves to the requested commit",
+              snapshot["source_version"] == snapshot_sha,
+              (snapshot["source_version"] or "none")[:12])
+        check("queued ingestion stored only the archived file content",
+              snapshot_text.strip() in snapshot["content"], snapshot["content"][:50])
 
         # ---- 6. secret file is rejected -------------------------------------
         print("\n6. A file with a credential is rejected, not redacted")

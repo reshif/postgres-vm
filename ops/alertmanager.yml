@@ -1,0 +1,66 @@
+# Alertmanager — routing, grouping, inhibition and silences.
+#
+# Prometheus evaluates rules; it does not notify. Before this file the eight
+# rules in alerts.yml transitioned to firing and stopped there: no receiver, no
+# dedup, no silences, nobody told. `/api/v1/alertmanagers` reported zero active,
+# which is a smoke detector wired to nothing.
+#
+# THE DEFAULT RECEIVER IS DELIBERATELY A BLACKHOLE WITH A NAME THAT SAYS SO.
+# Shipping a config that pretends to page someone is worse than shipping one
+# that is honestly unconfigured — the first is discovered during an incident.
+# Set ALERT_SLACK_WEBHOOK (or replace the receiver) to make it real.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  # Group by alertname AND service so one degraded service does not suppress an
+  # unrelated alert that happens to share a name.
+  group_by: ["alertname", "job"]
+  # Wait briefly before the first notification so a burst arrives as one message.
+  group_wait: 30s
+  group_interval: 5m
+  # Long enough that a firing alert is not a pager every five minutes; short
+  # enough that an unattended one resurfaces the same day.
+  repeat_interval: 12h
+  receiver: default
+
+  routes:
+    # Isolation and availability are the two things that must never wait for a
+    # daily digest. Suite 2 is zero-tolerance and a DOWN target means the rest of
+    # the dashboard is lying by omission.
+    - matchers: ['severity="critical"']
+      receiver: critical
+      group_wait: 0s
+      repeat_interval: 1h
+
+    # Curation alerts are real but they are a weekly-cadence problem, not a 3am
+    # one. ADR-0015's failure mode plays out over weeks; paging for it at night
+    # trains people to ignore the channel.
+    - matchers: ['alertname=~"ReviewBacklogGrowing|ExtractionAcceptanceOutOfBand|ExtractionDisabledByKillSwitch"']
+      receiver: curation
+      group_interval: 6h
+      repeat_interval: 24h
+
+inhibit_rules:
+  # If a target is down, every latency and rate alert about it is a restatement
+  # of the same fact. Without this, one dead API produces a wall of alerts and
+  # the actual cause is somewhere in the middle of it.
+  - source_matchers: ['alertname="TargetDown"']
+    target_matchers: ['severity=~"warning|info"']
+    equal: ["job"]
+
+receivers:
+  # Named so that a reader immediately knows notifications are not configured.
+  # Alerts still appear in Alertmanager's UI (:9093) and in Grafana.
+  - name: default
+
+  - name: critical
+    # Uncomment and set ALERT_SLACK_WEBHOOK in .env to route for real.
+    # slack_configs:
+    #   - api_url: ${ALERT_SLACK_WEBHOOK}
+    #     channel: "#memory-platform-alerts"
+    #     title: '{{ .CommonLabels.alertname }} ({{ .Status }})'
+    #     text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ .Annotations.description }}{{ end }}'
+
+  - name: curation

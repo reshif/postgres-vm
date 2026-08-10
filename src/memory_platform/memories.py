@@ -16,7 +16,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -24,11 +26,32 @@ from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
 from . import embeddings
+from .config import settings
 
 log = logging.getLogger("memory.memories")
 
 MAX_CONTENT = 8000   # mem.memories_content_check
 MAX_DIGEST = 400     # mem.memories_digest_check
+
+# Retrieval always has a nearest neighbour. That is an ordering fact, not
+# evidence that the project contains an answer. These stop words leave the
+# domain-bearing terms used by the explicit no-evidence decision below.
+_EVIDENCE_TOKEN = re.compile(r"[A-Za-z0-9_./-]+")
+_EVIDENCE_STOP_WORDS = frozenset({
+    "a", "an", "and", "are", "at", "be", "by", "can", "do", "does",
+    "did", "for", "from", "how", "i", "in", "is", "it", "of", "on",
+    "or", "should", "the", "to", "us", "was", "we", "what", "when",
+    "where", "which", "who", "why", "with", "you", "your",
+})
+_RELATIONSHIP_QUERY = re.compile(
+    r"\b(depends?|dependenc(?:y|ies)|impact|affects?|related|relationship|"
+    r"what\s+breaks|uses?|used\s+by)\b",
+    re.IGNORECASE,
+)
+_COMPOUND_QUESTION = re.compile(
+    r"\s+\band\s+(?=(?:how|why|what|when|where|which|who|can|does|do|is|are)\b)",
+    re.IGNORECASE,
+)
 
 # Source of the claim -> trust tier. See 00-MASTER-BLUEPRINT.md:383-386.
 #   authoritative  human-authored or human-approved, in Plane A (git)
@@ -93,6 +116,158 @@ def count_tokens(txt: str) -> int:
     is honest to within ~10-15% for English prose and code.
     """
     return max(1, (len(txt) + 3) // 4)
+
+
+def _evidence_terms(text: str) -> set[str]:
+    """Return the query-bearing terms used to justify a returned memory."""
+    terms: set[str] = set()
+    for raw in _EVIDENCE_TOKEN.findall(text or ""):
+        token = raw.lower()
+        if len(token) <= 1 or token in _EVIDENCE_STOP_WORDS:
+            continue
+        if token.endswith("ies") and len(token) > 4:
+            token = token[:-3] + "y"
+        elif (token.endswith("s") and len(token) > 4
+              and token not in {"postgres", "status"} and not token.endswith("ss")):
+            token = token[:-1]
+        terms.add(token)
+    return terms
+
+
+def _candidate_evidence_terms(text: str) -> set[str]:
+    """Expand a few unambiguous storage-name forms present in project memory."""
+    terms = _evidence_terms(text)
+    if "postgresql" in terms:
+        terms.add("postgres")
+    if any(term.endswith("vector") and term != "vector" for term in terms):
+        terms.add("vector")
+    if "deployment" in terms:
+        terms.add("deploy")
+    return terms
+
+
+def _evidence_clauses(query: str) -> list[tuple[str, set[str]]]:
+    """Split joined questions without weakening the evidence bar for a claim."""
+    clauses = [part.strip(" ,") for part in _COMPOUND_QUESTION.split(query) if part.strip(" ,")]
+    return [(clause, _evidence_terms(clause)) for clause in clauses] or [(query, set())]
+
+
+def _is_distinctive_term(term: str) -> bool:
+    """A single precise identifier can be evidence; a single generic word is not."""
+    return (len(term) >= 7 or "_" in term or "." in term or "/" in term
+            or any(char.isdigit() for char in term))
+
+
+def select_evidence(
+    query: str,
+    candidates: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Keep candidates that carry evidence for ``query`` and explain absence.
+
+    RRF and feature ranking are intentionally relative: every non-empty corpus
+    has a first result. Trust, recency, and utility also improve an ordering but
+    cannot establish that the query is answered. This gate therefore uses only
+    query-bound signals: direct terms and a resolved identifier/graph relation.
+    A raw cross-encoder score is useful corroboration and ranking input, but it
+    cannot establish evidence alone: a candidate sharing one real project term
+    with an otherwise unrecorded claim can score highly. The floor is configured
+    and must be calibrated by the retrieval evaluation suite as the corpus grows.
+    """
+    clauses = _evidence_clauses(query)
+    selected: list[dict[str, Any]] = []
+    rerank_floor = settings().evidence_rerank_min_score
+    relationship_clauses = {
+        index for index, (clause, _) in enumerate(clauses)
+        if _RELATIONSHIP_QUERY.search(clause)
+    }
+
+    for candidate in candidates:
+        searchable = " ".join(str(candidate.get(field) or "") for field in (
+            "title", "digest", "content", "identifiers",
+        ))
+        candidate_terms = _candidate_evidence_terms(searchable)
+        entity_signals: list[str] = []
+        matched_terms: set[str] = set()
+        matched_clause_indices: set[int] = set()
+        signals: list[str] = []
+
+        # Both arms begin with entities resolved from the query, so neither can
+        # be produced merely because a recent document happened to rank highly.
+        if candidate.get("r_ident") is not None:
+            entity_signals.append("identifier")
+        if candidate.get("r_graph") is not None:
+            entity_signals.append("graph")
+
+        cross_score = candidate.get("cross_score")
+        for index, (_, query_terms) in enumerate(clauses):
+            matches = query_terms & candidate_terms
+            required_matches = (
+                1 if len(query_terms) == 1 else
+                max(2, math.ceil(len(query_terms) / 2))
+            )
+            direct_evidence = bool(required_matches and len(matches) >= required_matches)
+            lexical_evidence = bool(
+                matches and candidate.get("r_lex") is not None
+                and any(_is_distinctive_term(term) for term in matches)
+                and len(query_terms) <= 2
+            )
+            if not (direct_evidence or lexical_evidence):
+                continue
+            matched_terms.update(matches)
+            matched_clause_indices.add(index)
+            signals.append("direct_terms" if direct_evidence else "lexical")
+            if cross_score is not None and float(cross_score) >= rerank_floor:
+                signals.append("reranker")
+
+        # A graph link shows that the candidate is near a named project entity;
+        # it does not prove an arbitrary statement about that entity. It can
+        # stand alone only for a relationship/impact question, otherwise it
+        # corroborates direct evidence.
+        if entity_signals and relationship_clauses:
+            matched_clause_indices.update(relationship_clauses)
+            signals = entity_signals + signals
+        elif entity_signals and matched_clause_indices:
+            signals = entity_signals + signals
+
+        if not signals:
+            continue
+        selected.append({
+            **candidate,
+            "evidence": {
+                "signals": list(dict.fromkeys(signals)),
+                "matched_terms": sorted(matched_terms),
+                "matched_clauses": [clauses[index][0] for index in sorted(matched_clause_indices)],
+                "matched_clause_indices": sorted(matched_clause_indices),
+            },
+        })
+
+    if selected:
+        supported = {
+            index for item in selected
+            for index in item["evidence"]["matched_clause_indices"]
+        }
+        missing = [clause for index, (clause, _) in enumerate(clauses) if index not in supported]
+        status = "supported" if not missing else "partial_support"
+        return selected, {
+            "status": status,
+            "reason": (
+                "Returned memories have direct relevance evidence; reranker scores are corroboration only."
+                if status == "supported" else
+                "Project memory supports part of this multi-part task; the remaining clause has no direct evidence."
+            ),
+            "considered_count": len(candidates),
+            "evidence_count": len(selected),
+            "supported_clauses": [clauses[index][0] for index in sorted(supported)],
+            "missing_clauses": missing,
+        }
+    return [], {
+        "status": "no_relevant_evidence",
+        "reason": "No candidate had enough direct relevance evidence for this claim.",
+        "considered_count": len(candidates),
+        "evidence_count": 0,
+        "supported_clauses": [],
+        "missing_clauses": [clause for clause, _ in clauses],
+    }
 
 
 # Section headings that carry the ANSWER, in priority order. A structured
@@ -422,18 +597,66 @@ def _embed_memory(conn, tenant_id: UUID, mid, title: str, digest: str, content: 
     return True
 
 
+def reembed_memory(conn: Connection, *, tenant_id: UUID, memory_id: UUID) -> dict[str, Any]:
+    """Refresh one memory in the active embedding model.
+
+    A console request is an explicit operator action, not the background
+    backfill. It therefore replaces the vector for the active model even when a
+    row already exists. Older model rows stay intact: deleting them would erase
+    the evidence needed to compare vector spaces during a model migration.
+    """
+    row = conn.execute(
+        text("SELECT id, title, content, digest FROM mem.memories "
+             "WHERE id = :id AND tenant_id = :tenant"),
+        {"id": str(memory_id), "tenant": str(tenant_id)},
+    ).mappings().one_or_none()
+    if row is None:
+        raise LookupError("no such memory in this scope")
+
+    model_id = embeddings.ensure_registered(conn)
+    try:
+        vectors = embeddings.provider().embed([
+            f"{row['title']}\n\n{row['content']}", row["digest"],
+        ])
+    except embeddings.EmbeddingUnavailable as exc:
+        raise ValueError(f"embedding provider is unavailable: {exc}") from exc
+
+    conn.execute(
+        text("INSERT INTO mem.memory_embeddings "
+             "  (memory_id, model_id, tenant_id, embedding, digest_embedding) "
+             "VALUES (:memory, :model, :tenant, CAST(:embedding AS halfvec(1024)), "
+             "        CAST(:digest AS halfvec(1024))) "
+             "ON CONFLICT (memory_id, model_id) DO UPDATE "
+             "SET embedding = EXCLUDED.embedding, "
+             "    digest_embedding = EXCLUDED.digest_embedding, created_at = now()"),
+        {"memory": str(memory_id), "model": model_id, "tenant": str(tenant_id),
+         "embedding": embeddings.to_pgvector(vectors[0]),
+         "digest": embeddings.to_pgvector(vectors[1])},
+    )
+    return {"id": str(memory_id), "model_id": model_id, "embedded": True}
+
+
 _LEXICAL = text("""
-SELECT m.id, m.title, m.digest, m.tier::text, m.type::text,
+SELECT m.id, m.title, m.digest, m.content, m.tier::text, m.type::text,
        ts_rank_cd(m.content_tsv, {q}) AS score
-  FROM mem.memories m
+ FROM mem.memories m
  WHERE m.content_tsv @@ {q}
-   AND m.status = 'active'
+   AND m.valid_at @> CAST(:as_of AS timestamptz)
+   AND m.recorded_at <= CAST(:as_of AS timestamptz)
+   AND (:historical OR m.status = 'active')
  ORDER BY score DESC
  LIMIT :k
 """.format(q="websearch_to_tsquery('english', :q)"))
 
 
-def _lexical_only(conn: Connection, query: str, limit: int) -> list[dict[str, Any]]:
+def _lexical_only(
+    conn: Connection,
+    query: str,
+    limit: int,
+    *,
+    as_of: datetime | None = None,
+    historical: bool = False,
+) -> list[dict[str, Any]]:
     """The lexical arm standing alone, when the vector arm is unavailable.
 
     Uses websearch_to_tsquery to match mem.search_hybrid's own lexical arm — using
@@ -447,7 +670,11 @@ def _lexical_only(conn: Connection, query: str, limit: int) -> list[dict[str, An
     strict pass finds nothing we retry OR-ing the terms and let ts_rank_cd sort
     it out — recall matters more than precision when the alternative is silence.
     """
-    rows = conn.execute(_LEXICAL, {"q": query, "k": limit}).mappings().all()
+    effective_as_of = as_of or datetime.now(timezone.utc)
+    rows = conn.execute(_LEXICAL, {
+        "q": query, "k": limit, "as_of": effective_as_of,
+        "historical": historical,
+    }).mappings().all()
     if rows:
         return [dict(r, degraded=True, lexical_mode="all-terms") for r in rows]
 
@@ -456,15 +683,18 @@ def _lexical_only(conn: Connection, query: str, limit: int) -> list[dict[str, An
         return []
     rows = conn.execute(
         text("""
-        SELECT m.id, m.title, m.digest, m.tier::text, m.type::text,
+        SELECT m.id, m.title, m.digest, m.content, m.tier::text, m.type::text,
                ts_rank_cd(m.content_tsv, to_tsquery('english', :q)) AS score
-          FROM mem.memories m
+         FROM mem.memories m
          WHERE m.content_tsv @@ to_tsquery('english', :q)
-           AND m.status = 'active'
+           AND m.valid_at @> CAST(:as_of AS timestamptz)
+           AND m.recorded_at <= CAST(:as_of AS timestamptz)
+           AND (:historical OR m.status = 'active')
          ORDER BY score DESC
          LIMIT :k
         """),
-        {"q": " | ".join(terms), "k": limit},
+        {"q": " | ".join(terms), "k": limit, "as_of": effective_as_of,
+         "historical": historical},
     ).mappings().all()
     return [dict(r, degraded=True, lexical_mode="any-term") for r in rows]
 
@@ -477,6 +707,7 @@ def search(
     min_tier: str = "observed",
     tenant_id: UUID | None = None,
     project_id: UUID | None = None,
+    as_of: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid retrieval. Falls back to the lexical arm alone if the embedder is
     down, rather than returning nothing (ADR-0008)."""
@@ -487,8 +718,10 @@ def search(
         log.warning("embedder down, lexical-only retrieval: %s", exc)
         qvec, degraded = None, True
 
+    effective_as_of = as_of or datetime.now(timezone.utc)
     if degraded:
-        return _lexical_only(conn, query, limit)
+        return _lexical_only(conn, query, limit, as_of=effective_as_of,
+                             historical=as_of is not None)
 
     # Over-fetch, then rerank. Two reasons this is not just RRF order:
     #
@@ -506,19 +739,23 @@ def search(
                                            project_id=project_id) if tenant_id else []
 
     rows = conn.execute(text("""
-        SELECT m.id, m.title, m.digest, m.tier::text AS tier, m.type::text AS type,
+        SELECT m.id, m.title, m.digest, m.content, m.tier::text AS tier, m.type::text AS type,
                m.importance_prior, m.utility, m.retrieval_count, m.recorded_at,
                m.identifiers, m.status::text AS status,
                s.rrf_score, s.r_vec, s.r_lex, s.r_ident, s.r_graph, s.r_time
           FROM mem.search_hybrid(CAST(:v AS halfvec(1024)), :q, NULL,
-                                 CAST(:tier AS mem.trust_tier), now(),
+                                 CAST(:tier AS mem.trust_tier), CAST(:as_of AS timestamptz),
                                  CAST(:entity_ids AS uuid[]), :k, 60,
-                                 ARRAY['active']::mem.memory_status[]) s
+                                 CAST(:statuses AS mem.memory_status[])) s
           JOIN mem.memories m ON m.id = s.memory_id
-         WHERE upper(m.valid_at) IS NULL
+         WHERE m.valid_at @> CAST(:as_of AS timestamptz)
+           AND m.recorded_at <= CAST(:as_of AS timestamptz)
     """), {"v": qvec, "q": query, "tier": min_tier,
            "entity_ids": "{" + ",".join(ent) + "}",
-           "k": max(limit * 4, 40)}).mappings().all()
+           "k": max(limit * 4, 40), "as_of": effective_as_of,
+           "statuses": "{" + ",".join(
+               ["active", "archived", "superseded"] if as_of is not None else ["active"]
+           ) + "}"}).mappings().all()
 
     # Local imports: ranking/planner must not depend on memories (context.py
     # imports all three, and a cycle here would surface as an import error only

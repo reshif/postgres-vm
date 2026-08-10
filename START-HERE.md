@@ -2,7 +2,7 @@
 
 Runnable memory-platform implementation. The foundation, ingestion, retrieval,
 MCP surface, curation console, and selected structure and hardening features are
-implemented; Phase 3 retrieval accuracy and the later roadmap acceptance gates
+implemented; Phase 3 latency and the later roadmap acceptance gates
 are still open.
 
 ## Quick start
@@ -108,15 +108,15 @@ Honest inventory, so you know what you are looking at:
 
 | Component | State |
 |---|---|
-| Schema, RLS, temporal constraints, hybrid-search function | **Real.** Applied through migration 0013. |
+| Schema, RLS, temporal constraints, hybrid-search function | **Real.** Applied through migration 0018. |
 | Roles, PgBouncer auth_query, connection topology | **Real.** |
 | `db.scoped()` — the only sanctioned transaction path | **Real.** No unscoped equivalent is exposed. |
 | `/readyz`, `/v1/schema/objects` | **Real.** They run the isolation self-test. |
-| CLI, project binding, deterministic capture, Plane A ingestion | **Real.** Covered by the API suite. |
-| Context engine, hybrid retrieval, ranking, explainability | **Real, but not accepted.** Suite 1 accuracy gates are still below target. |
-| MCP `tools/call` | **Real.** Four tools: context, search, write, explain. The cross-client acceptance demo remains to be run. |
+| CLI, project binding, deterministic capture, Plane A ingestion | **Real.** Covered by API and real-Git-workspace CLI acceptance tests. |
+| Context engine, hybrid retrieval, ranking, explainability | **Real.** Suite 1 quality gates pass on the pinned corpus; Phase 3 remains unaccepted because the measured p95 exceeds the roadmap's `<300 ms` latency target. |
+| MCP tools and resources | **Real.** Four tools (context, search, write, explain) plus RLS-scoped project, conflict, memory, and entity resources. The automated suite verifies two independent MCP sessions, event provenance, private resource caching, and bound-scope isolation; the manual cross-client acceptance demo remains to be run. |
 | Workers | **Real.** Poll ingestion, embedding, extraction and maintenance paths are implemented. |
-| Console | **Partially built.** Inbox, debugger, memory detail, conflicts and health are live; Explorer, Graph, Timeline and Evals views remain Phase 8 work. |
+| Console | **Built for the specified curation and inspection views.** Inbox, Explorer bulk lifecycle actions, tabbed memory evidence, procedures, graph with table fallback, bi-temporal timeline, conflicts, debugger, health, evaluation history, settings/grants, audit, and project administration run through the scoped API. Privileged configuration mutation remains an explicit control-plane boundary. |
 
 The detailed roadmap and binary acceptance gates remain in `05-BUILD-PLAN.md`.
 Do not treat a feature being present as a phase being accepted: the evaluation
@@ -151,8 +151,9 @@ A gate you cannot measure until the day you need it is not a gate.
 ## Current evaluation standing
 
 Suite 1 runs against `eval/corpus/.memory`, never the live project tree. The
-current baseline passes the safety and latency gates, but does not meet the
-retrieval gates: `recall@5 = 0.800` against `0.90`, and `MRR = 0.694` against
-`0.75`. Reconcile the pinned corpus and improve retrieval before declaring Phase
-3 complete. Historical results are recorded in `eval/RESULTS.md`; compare only
-runs with the same snapshot id and configuration.
+current quality baseline passes: `recall@5 = 0.900`, `MRR = 0.794`,
+`nDCG@10 = 0.815`, and `forbidden@10 = 0`. It is not a Phase 3 acceptance yet:
+the latest p95 search measurement is `548 ms`, above the roadmap's `<300 ms`
+target. The evaluator now records that as a failed gate and exits non-zero.
+Historical results are recorded in `eval/RESULTS.md`; compare only runs with the
+same snapshot id and configuration.
