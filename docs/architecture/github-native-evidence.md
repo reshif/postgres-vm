@@ -55,6 +55,7 @@ id: service-storage
 subject: service
 predicate: uses
 object: PostgreSQL
+type: decision
 state: accepted
 confidence: 0.960
 evidence:

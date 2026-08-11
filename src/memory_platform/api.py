@@ -24,7 +24,8 @@ from pydantic import BaseModel, Field
 
 from sqlalchemy import text
 
-from . import __version__, context, db, limits, memories, metrics, telemetry
+from . import (__version__, context, db, github_projection, limits, memories,
+               metrics, planner, ranking, reranker, telemetry)
 from .config import settings
 
 log = logging.getLogger("memory.api")
@@ -307,21 +308,45 @@ def search_memories(
     ref_list = [r.strip() for r in refs.split(",") if r.strip()]
     if ref_list:
         with db.scoped(tenant_id, principal_id or tenant_id, project_id) as conn:
-            rows = conn.execute(text(
-                "SELECT id, title, content, digest, type::text AS type, "
-                "       tier::text AS tier, source_uri, source_version "
-                "  FROM mem.memories WHERE id = ANY(CAST(:ids AS uuid[]))"),
-                {"ids": "{" + ",".join(ref_list) + "}"}).mappings().all()
-        return {"refs": ref_list, "count": len(rows),
-                "results": [{**dict(r), "id": str(r["id"])} for r in rows]}
+            assertion_ids = [parsed for ref in ref_list
+                             if (parsed := github_projection.parse_assertion_ref(ref))]
+            memory_refs = [ref for ref in ref_list if not ref.startswith(
+                github_projection.ASSERTION_REF_PREFIX)]
+            memory_rows = []
+            if memory_refs:
+                memory_rows = conn.execute(text(
+                    "SELECT id, title, content, digest, type::text AS type, "
+                    "       tier::text AS tier, source_uri, source_version "
+                    "  FROM mem.memories WHERE id = ANY(CAST(:ids AS uuid[]))"),
+                    {"ids": "{" + ",".join(memory_refs) + "}"}).mappings().all()
+            assertion_rows = github_projection.expand_refs(conn, assertion_ids)
+        by_ref = {
+            **{str(row["id"]): {**dict(row), "id": str(row["id"]), "ref": str(row["id"]),
+                                 "kind": "memory"} for row in memory_rows},
+            **{row["ref"]: row for row in assertion_rows},
+        }
+        rows = [by_ref[ref] for ref in ref_list if ref in by_ref]
+        return {"refs": ref_list, "count": len(rows), "results": rows}
 
     if not q:
         raise HTTPException(422, "pass q (a query) or refs (ids to expand)")
     _guard_read(str(tenant_id))
     with db.scoped(tenant_id, principal_id or tenant_id, project_id) as conn:
-        hits = memories.search(conn, q, limit=limit,
-                               tenant_id=tenant_id, project_id=project_id,
-                               as_of=as_of)
+        github_native = github_projection.is_github_native_project(conn, project_id)
+        if github_native:
+            candidates = github_projection.candidates(
+                conn, q, tenant_id=tenant_id, project_id=project_id,
+                limit=max(limit * 4, 40), as_of=as_of)
+            candidates, rr_meta = reranker.apply(q, candidates)
+            _, weights = ranking.load_profile(conn)
+            hits = ranking.rerank(
+                candidates, weights=weights, task_terms=context.task_terms(q),
+                plan=planner.plan(q))[:limit]
+        else:
+            hits = memories.search(conn, q, limit=limit,
+                                   tenant_id=tenant_id, project_id=project_id,
+                                   as_of=as_of)
+            rr_meta = None
     evidence, answerability = memories.select_evidence(q, hits)
     no_evidence = answerability["status"] == "no_relevant_evidence"
     return {
@@ -331,6 +356,7 @@ def search_memories(
         # Surfaced, not hidden: a caller seeing lexical-only results should know
         # the vector arm was unavailable rather than assume nothing matched.
         "degraded": bool(hits and hits[0].get("degraded")),
+        "rerank": rr_meta,
         "answerability": answerability,
         "notice": (
             "No relevant evidence found in current project memory. "
@@ -414,6 +440,15 @@ def explain(
             "  FROM mem.memories m JOIN mem.projects p ON p.id = m.project_id "
             " WHERE m.id = :i"), {"i": str(ref)}).mappings().one_or_none()
         if not mem:
+            assertion = github_projection.explain(conn, ref)
+            if assertion:
+                usage = conn.execute(text(
+                    "SELECT count(*)::int AS retrievals, count(DISTINCT pack_id)::int AS packs, "
+                    "       count(DISTINCT principal_id)::int AS principals, max(created_at) AS last_seen "
+                    "  FROM mem.retrieval_events WHERE :i = ANY(returned_ids)"),
+                    {"i": str(ref)}).mappings().one()
+                return {"assertion": assertion, "provenance": assertion["evidence"],
+                        "usage": dict(usage)}
             # Indistinguishable from "exists in another tenant" on purpose: a 404
             # that means "not yours" is an existence oracle.
             raise HTTPException(404, "no such memory in this scope")

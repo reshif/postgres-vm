@@ -23,6 +23,7 @@ class AssertionFormatError(ValueError):
 _KEY = re.compile(r"^[a-z0-9][a-z0-9._-]{2,119}$")
 _SHA = re.compile(r"^[0-9a-fA-F]{7,64}$")
 _STATES = frozenset({"accepted", "contested", "retracted"})
+_CONTEXT_TYPES = frozenset({"constraint", "convention", "decision", "procedure", "entity_fact"})
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class AssertionDocument:
     object_value: str
     state: str
     confidence: float
+    context_type: str
     evidence: tuple[EvidenceReference, ...]
 
 
@@ -96,6 +98,9 @@ def parse_assertion(path: str, raw: str) -> AssertionDocument:
     state = _bounded(meta, "state", limit=30).lower()
     if state not in _STATES:
         raise AssertionFormatError("assertion state must be accepted, contested, or retracted")
+    context_type = str(meta.get("type") or "entity_fact").strip().lower()
+    if context_type not in _CONTEXT_TYPES:
+        raise AssertionFormatError("assertion type must be constraint, convention, decision, procedure, or entity_fact")
     try:
         confidence = float(meta.get("confidence", "1.0"))
     except (TypeError, ValueError) as exc:
@@ -115,6 +120,7 @@ def parse_assertion(path: str, raw: str) -> AssertionDocument:
         assertion_key=key,
         subject=_bounded(meta, "subject"), predicate=_bounded(meta, "predicate"),
         object_value=_bounded(meta, "object"), state=state, confidence=confidence,
+        context_type=context_type,
         evidence=references,
     )
 
@@ -258,18 +264,19 @@ def write_assertion(
         "INSERT INTO mem.evidence_assertions "
         "(tenant_id, project_id, assertion_key, subject, predicate, object_value, attributes, "
         " state, confidence, source_repository, source_path, source_revision, accepted_at, accepted_by) "
-        "VALUES (:tenant, :project, :key, :subject, :predicate, :object, '{}'::jsonb, "
+        "VALUES (:tenant, :project, :key, :subject, :predicate, :object, CAST(:attributes AS jsonb), "
         "        :state, :confidence, :repository, :path, :revision, "
         "        CASE WHEN :state = 'accepted' THEN now() ELSE NULL END, :accepted_by) "
         "ON CONFLICT (project_id, assertion_key, source_revision) DO UPDATE SET "
         " subject = EXCLUDED.subject, predicate = EXCLUDED.predicate, object_value = EXCLUDED.object_value, "
-        " state = EXCLUDED.state, confidence = EXCLUDED.confidence, updated_at = now() "
+        " state = EXCLUDED.state, confidence = EXCLUDED.confidence, attributes = EXCLUDED.attributes, updated_at = now() "
         "RETURNING id"
     ), {
         "tenant": str(tenant_id), "project": str(project_id), "key": document.assertion_key,
         "subject": document.subject, "predicate": document.predicate,
         "object": document.object_value, "state": document.state,
         "confidence": document.confidence,
+        "attributes": json.dumps({"context_type": document.context_type}),
         "repository": "https://" + normalize_repository_url(source_repository),
         "path": source_path, "revision": source_revision.lower(),
         "accepted_by": str(accepted_by) if accepted_by else None,

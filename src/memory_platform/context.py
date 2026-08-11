@@ -39,7 +39,8 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-from . import conflicts, embeddings, entities, memories, planner, ranking, reranker
+from . import (conflicts, embeddings, entities, github_projection, memories,
+               planner, ranking, reranker)
 
 log = logging.getLogger("memory.context")
 
@@ -165,6 +166,7 @@ def build_pack(
     effective_as_of = as_of or datetime.now(timezone.utc)
     profile, weights = ranking.load_profile(conn, profile_id)
     qplan = planner.plan(task)
+    github_native = github_projection.is_github_native_project(conn, project_id)
     t = mark("profile", started)
 
     # Tier 1 (inferred) is quarantined and only surfaces on explicit request,
@@ -181,31 +183,41 @@ def build_pack(
     min_tier = "inferred" if include_unverified else "observed"
 
     degraded = False
-    try:
-        qvec = embeddings.to_pgvector(embeddings.embed_one(task))
-    except embeddings.EmbeddingUnavailable as exc:
-        log.warning("embedder down; context pack built from the lexical arm only: %s", exc)
-        qvec, degraded = None, True
-    t = mark("embed", t)
-
-    if degraded:
-        rows = [dict(r) for r in memories._lexical_only(
-            conn, task, candidate_k, as_of=effective_as_of,
-            historical=as_of is not None)]
-        for r in rows:
-            r.setdefault("rrf_score", r.get("score", 0.0))
-            r.setdefault("recorded_at", None)
-            r.setdefault("identifiers", "")
+    if github_native:
+        # The Git projection is intentionally structured-lexical. Assertions
+        # have no copied source body or embedding; reranking still evaluates the
+        # reviewed claim text below, but no embedder outage applies to this path.
+        timings["embed"] = 0
+        rows = github_projection.candidates(
+            conn, task, tenant_id=tenant_id, project_id=project_id,
+            limit=candidate_k, as_of=effective_as_of)
+        t = mark("search", t)
     else:
-        ent = entities.resolve_query_entities(conn, task, tenant_id=tenant_id,
-                                              project_id=project_id)
-        rows = [dict(r) for r in conn.execute(CANDIDATES, {
-            "v": qvec, "q": task, "tier": min_tier,
-            "entity_ids": "{" + ",".join(ent) + "}",
-            "k": candidate_k, "statuses": "{" + ",".join(statuses) + "}",
-            "as_of": effective_as_of,
-        }).mappings().all()]
-    t = mark("search", t)
+        try:
+            qvec = embeddings.to_pgvector(embeddings.embed_one(task))
+        except embeddings.EmbeddingUnavailable as exc:
+            log.warning("embedder down; context pack built from the lexical arm only: %s", exc)
+            qvec, degraded = None, True
+        t = mark("embed", t)
+
+        if degraded:
+            rows = [dict(r) for r in memories._lexical_only(
+                conn, task, candidate_k, as_of=effective_as_of,
+                historical=as_of is not None)]
+            for r in rows:
+                r.setdefault("rrf_score", r.get("score", 0.0))
+                r.setdefault("recorded_at", None)
+                r.setdefault("identifiers", "")
+        else:
+            ent = entities.resolve_query_entities(conn, task, tenant_id=tenant_id,
+                                                  project_id=project_id)
+            rows = [dict(r) for r in conn.execute(CANDIDATES, {
+                "v": qvec, "q": task, "tier": min_tier,
+                "entity_ids": "{" + ",".join(ent) + "}",
+                "k": candidate_k, "statuses": "{" + ",".join(statuses) + "}",
+                "as_of": effective_as_of,
+            }).mappings().all()]
+        t = mark("search", t)
 
     vectors = {r["id"]: _parse_vec(r.get("dvec")) for r in rows}
     rows, rr_meta = reranker.apply(task, rows)
@@ -232,9 +244,10 @@ def build_pack(
     # the first item never fit and the section stayed empty on every pack. The
     # project profile is described in 759 as "the highest-leverage file in the
     # system - it is in every context pack", and it was in none of them.
-    always = _always_included(conn, tenant_id, project_id,
+    always = ([] if github_native else
+              _always_included(conn, tenant_id, project_id,
                                as_of=effective_as_of,
-                               historical=as_of is not None)
+                               historical=as_of is not None))
     always_ids = {str(a["id"]) for a in always}
     baseline_evidence = {
         str(item["id"]): item for item in evidence if str(item["id"]) in always_ids
@@ -457,12 +470,16 @@ def _render(item: dict) -> dict:
     few items it actually needs.
     """
     src = None
-    if item.get("source_uri"):
+    if item.get("record_kind") == "assertion":
+        src = (f"github:{item.get('source_repository')}@{item.get('source_version')}:"
+               f"{item.get('source_uri')}")
+    elif item.get("source_uri"):
         sv = (item.get("source_version") or "")[:7]
         src = f"git:{item['source_uri']}@{sv}" if sv else item["source_uri"]
     return {
-        "ref": str(item["id"]),
+        "ref": item.get("ref") or str(item["id"]),
         "id": item["id"],
+        "record_kind": item.get("record_kind", "memory"),
         "title": item.get("title"),
         "digest": item.get("digest"),
         "trust": item.get("tier"),
