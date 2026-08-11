@@ -104,7 +104,7 @@ groups:
       - alert: RerankerEndpointDown
         expr: |
           probe_success{service="reranker"} == 0
-            and on () memory_rerank_enabled == 1
+            and on () memory_rerank_enabled{job="memory-api"} == 1
         for: 5m
         labels: { severity: warning }
         annotations:
@@ -197,6 +197,7 @@ groups:
           avg_over_time(memory:gate_context_latency_ok[1h]) < 0.90
             and
           avg_over_time(memory:gate_context_latency_ok[5m]) < 0.90
+            and on () memory:context_pack_observations_per_minute > 0
         for: 5m
         labels: { severity: warning }
         annotations:
@@ -208,6 +209,7 @@ groups:
           avg_over_time(memory:gate_context_latency_ok[24h]) < 0.98
             and
           avg_over_time(memory:gate_context_latency_ok[2h]) < 0.98
+            and on () memory:context_pack_observations_per_minute > 0
         for: 30m
         labels: { severity: info }
         annotations:
@@ -219,6 +221,7 @@ groups:
           avg_over_time(memory:gate_write_latency_ok[1h]) < 0.95
             and
           avg_over_time(memory:gate_write_latency_ok[5m]) < 0.95
+            and on () memory:write_observations_per_minute > 0
         for: 10m
         labels: { severity: warning }
         annotations:

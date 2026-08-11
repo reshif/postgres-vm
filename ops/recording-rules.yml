@@ -15,6 +15,13 @@ groups:
     interval: 30s
     rules:
       # ---- retrieval latency, the Phase 3 and §7.3 gate --------------------
+      - record: memory:context_latency_p50
+        expr: |
+          histogram_quantile(
+            0.50,
+            sum by (le) (rate(memory_context_duration_seconds_bucket[5m]))
+          )
+
       - record: memory:context_latency_p95
         expr: |
           histogram_quantile(
@@ -28,6 +35,12 @@ groups:
             0.99,
             sum by (le) (rate(memory_context_duration_seconds_bucket[5m]))
           )
+
+      # A histogram with no observations yields NaN. Keep the evidence count as
+      # a first-class recording so an idle system is distinguishable from a
+      # slow one in both alerts and Grafana; zero traffic is not a failed SLO.
+      - record: memory:context_pack_observations_per_minute
+        expr: sum(rate(memory_context_duration_seconds_count[5m])) * 60
 
       # Per-stage, so "is it the embedder again" is answerable without
       # re-deriving the expression each time.
@@ -46,9 +59,12 @@ groups:
             sum by (le) (rate(memory_write_duration_seconds_bucket[5m]))
           )
 
+      - record: memory:write_observations_per_minute
+        expr: sum(rate(memory_write_duration_seconds_count[5m])) * 60
+
       # ---- throughput and health ------------------------------------------
       - record: memory:packs_per_minute
-        expr: sum(rate(memory_context_duration_seconds_count[5m])) * 60
+        expr: memory:context_pack_observations_per_minute
 
       # Share of packs served without the vector arm. A ratio rather than a
       # count, because "12 degraded packs" means nothing without the
@@ -73,10 +89,14 @@ groups:
       # gives "the fraction of the last week we were inside the gate", which is
       # what "for 7 days" actually asks and is otherwise fiddly to express.
       - record: memory:gate_context_latency_ok
-        expr: (memory:context_latency_p95 < bool 0.35)
+        expr: |
+          (memory:context_latency_p95 < bool 0.35)
+            and on () (memory:context_pack_observations_per_minute > 0)
 
       - record: memory:gate_write_latency_ok
-        expr: (memory:write_latency_p99 < bool 5)
+        expr: |
+          (memory:write_latency_p99 < bool 5)
+            and on () (memory:write_observations_per_minute > 0)
 
       - record: memory:gate_inbox_depth_ok
         expr: (max(memory_inbox_depth) < bool 40)

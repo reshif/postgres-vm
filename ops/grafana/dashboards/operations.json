@@ -1,7 +1,7 @@
 {
   "uid": "memory-operations",
   "title": "Memory - Operations & Alerts",
-  "description": "The operator view for service readiness, live incidents, event-loop liveness, and Alertmanager delivery. Use the retrieval and curation dashboards to diagnose product behavior after this page identifies the failing contract.",
+  "description": "Start here during an incident: separate paging severity from readiness, then use the focused retrieval or curation dashboard to diagnose the failed contract. Dashboard links stay inside Grafana so they remain valid outside local development.",
   "tags": [
     "memory-platform",
     "operations",
@@ -16,22 +16,15 @@
   },
   "links": [
     {
-      "title": "Alertmanager",
-      "url": "http://localhost:9093/#/alerts",
+      "title": "Alerting",
+      "url": "/alerting/list",
       "type": "link",
       "icon": "bell",
       "targetBlank": true
     },
     {
-      "title": "Prometheus targets",
-      "url": "http://localhost:9090/targets",
-      "type": "link",
-      "icon": "external link",
-      "targetBlank": true
-    },
-    {
-      "title": "Knowledge Console",
-      "url": "http://localhost:3000/knowledge/",
+      "title": "Explore metrics",
+      "url": "/explore",
       "type": "link",
       "icon": "external link",
       "targetBlank": true
@@ -46,7 +39,7 @@
     {
       "type": "stat",
       "title": "Firing alerts",
-      "description": "All Prometheus alerts currently firing. Open Alertmanager to acknowledge, group, or silence them.",
+      "description": "All currently firing Prometheus alerts, including low-priority SLO early warnings. Use the critical and warning counts beside it to decide whether this is an incident.",
       "gridPos": { "h": 6, "w": 4, "x": 0, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
@@ -69,7 +62,7 @@
         "overrides": []
       },
       "options": {
-        "colorMode": "background",
+        "colorMode": "none",
         "graphMode": "none",
         "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
       }
@@ -81,7 +74,7 @@
       "gridPos": { "h": 6, "w": 4, "x": 4, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "count(ALERTS{alertstate=\"firing\",severity=\"critical\"})", "instant": true, "range": false }
+        { "refId": "A", "expr": "count(ALERTS{alertstate=\"firing\",severity=\"critical\"}) or vector(0)", "instant": true, "range": false }
       ],
       "fieldConfig": {
         "defaults": {
@@ -167,12 +160,12 @@
     },
     {
       "type": "stat",
-      "title": "Alertmanager config",
-      "description": "Whether Alertmanager successfully loaded its rendered routing configuration.",
+      "title": "Warning alerts",
+      "description": "Warnings need active engineering attention but are not a page. Informational SLO signals remain visible in the alert inventory below without inflating this number.",
       "gridPos": { "h": 6, "w": 4, "x": 16, "y": 1 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "alertmanager_config_last_reload_successful", "instant": true, "range": false }
+        { "refId": "A", "expr": "count(ALERTS{alertstate=\"firing\",severity=\"warning\"}) or vector(0)", "instant": true, "range": false }
       ],
       "fieldConfig": {
         "defaults": {
@@ -182,8 +175,8 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 1 }
             ]
           }
         },
@@ -369,11 +362,11 @@
     {
       "type": "stat",
       "title": "Reranker contract",
-      "description": "The reranker is optional only when the API does not select it. This makes its enabled state and endpoint health explicit.",
+      "description": "The API is the only process that selects the reranker. Showing worker or scheduler configuration here created three contradictory values for one serving decision.",
       "gridPos": { "h": 8, "w": 8, "x": 16, "y": 17 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "memory_rerank_enabled", "legendFormat": "enabled", "instant": true, "range": false },
+        { "refId": "A", "expr": "memory_rerank_enabled{job=\"memory-api\"}", "legendFormat": "api profile", "instant": true, "range": false },
         { "refId": "B", "expr": "probe_success{service=\"reranker\"}", "legendFormat": "endpoint", "instant": true, "range": false }
       ],
       "fieldConfig": {
@@ -423,11 +416,11 @@
     {
       "type": "timeseries",
       "title": "Readiness probe history",
-      "description": "One is passing; zero is a failing endpoint. Critical paths are API, Console, MCP, Postgres, and PgBouncer.",
+      "description": "One is passing; zero is a failing endpoint. Optional reranker history is intentionally excluded because its separate contract above determines whether it matters.",
       "gridPos": { "h": 10, "w": 12, "x": 12, "y": 26 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
-        { "refId": "A", "expr": "probe_success", "legendFormat": "{{service}}", "range": true }
+        { "refId": "A", "expr": "probe_success{criticality=~\"critical|observability\"}", "legendFormat": "{{service}}", "range": true }
       ],
       "fieldConfig": {
         "defaults": {

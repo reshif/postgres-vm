@@ -1,7 +1,7 @@
 {
   "uid": "memory-curation",
   "title": "Memory — Curation & Trust",
-  "description": "ADR-0015 says the thing that fails is not the extractor and not the queue — it is the human. This dashboard exists so the backlog cannot grow unnoticed, and so 'extraction is off' is never discovered a month late.",
+  "description": "ADR-0015 says the thing that fails is not the extractor and not the queue — it is the human. Select a project before making a curation decision; global write and injection metrics are explicitly labelled as service-wide.",
   "tags": [
     "memory-platform"
   ],
@@ -11,6 +11,26 @@
   "time": {
     "from": "now-24h",
     "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "project",
+        "label": "Project",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "definition": "label_values(memory_inbox_depth, project)",
+        "query": { "query": "label_values(memory_inbox_depth, project)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
+        "refresh": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "hide": 0,
+        "sort": 1,
+        "current": { "text": "All", "value": ["$__all"] },
+        "options": []
+      }
+    ]
   },
   "panels": [
     {
@@ -25,8 +45,8 @@
     },
     {
       "type": "stat",
-      "title": "Review backlog",
-      "description": "Alert at 100. Extraction auto-disables at 200 sustained for 14 days. Thresholds here are those exact numbers.",
+      "title": "Review backlog (selected)",
+      "description": "Alert at 100. Extraction auto-disables at 200 sustained for 14 days. The selector prevents unrelated project queues from being mistaken for this project's work.",
       "gridPos": {
         "h": 5,
         "w": 6,
@@ -40,7 +60,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(memory_inbox_depth)",
+          "expr": "sum(memory_inbox_depth{project=~\"$project\"})",
           "legendFormat": "awaiting review",
           "instant": true,
           "range": false
@@ -85,8 +105,8 @@
     },
     {
       "type": "stat",
-      "title": "LLM extraction",
-      "description": "0 means the kill switch has fired or extraction was never enabled. Either way, a silent extractor should be visible here rather than inferred from missing candidates.",
+      "title": "LLM extraction (selected)",
+      "description": "0 means the kill switch has fired or extraction was never enabled. With multiple projects selected, this shows the least healthy selected project.",
       "gridPos": {
         "h": 5,
         "w": 6,
@@ -100,7 +120,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "min(memory_extraction_enabled)",
+          "expr": "min(memory_extraction_enabled{project=~\"$project\"})",
           "legendFormat": "enabled",
           "instant": true,
           "range": false
@@ -154,7 +174,7 @@
     },
     {
       "type": "gauge",
-      "title": "Extraction acceptance rate",
+      "title": "Extraction acceptance rate (selected)",
       "description": "Healthy band is 30-85%. Below: the extractor is generating cleanup work. Above: near-total acceptance usually means review has become a formality. Both ends are failures.",
       "gridPos": {
         "h": 5,
@@ -169,7 +189,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "avg(memory_extraction_acceptance_rate)",
+          "expr": "avg(memory_extraction_acceptance_rate{project=~\"$project\"})",
           "legendFormat": "acceptance",
           "instant": true,
           "range": false
@@ -216,7 +236,7 @@
     },
     {
       "type": "stat",
-      "title": "Oldest unreviewed item",
+      "title": "Oldest unreviewed item (selected)",
       "description": "Candidates expire at 14 days. An item older than that was never triaged.",
       "gridPos": {
         "h": 5,
@@ -231,7 +251,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(memory_inbox_oldest_days)",
+          "expr": "max(memory_inbox_oldest_days{project=~\"$project\"})",
           "legendFormat": "days",
           "instant": true,
           "range": false
@@ -301,7 +321,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "memory_inbox_depth",
+          "expr": "memory_inbox_depth{project=~\"$project\"}",
           "legendFormat": "{{project}}"
         }
       ],
@@ -364,7 +384,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "memory_conflicts_open",
+          "expr": "memory_conflicts_open{project=~\"$project\"}",
           "legendFormat": "{{project}}"
         }
       ],
@@ -418,8 +438,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Writes by assigned tier",
-      "description": "Tier is assigned server-side from source_type and is never accepted from a caller. Git content is authoritative; agent content is quarantined at tier 1.",
+      "title": "Service-wide writes by assigned tier",
+      "description": "Request-time write metrics intentionally carry no project label, avoiding high-cardinality scoped telemetry. Tier is assigned server-side from source_type and is never accepted from a caller.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -476,8 +496,8 @@
     },
     {
       "type": "barchart",
-      "title": "Injection signals that fired",
-      "description": "Suite 5. A memory system is a persistence layer for indirect prompt injection; these are the attempts the heuristic caught on the way in.",
+      "title": "Service-wide injection signals",
+      "description": "Suite 5. Security telemetry is service-wide so unusual attempts remain visible without putting project content into metric labels.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -538,7 +558,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (status) (memory_memories)",
+          "expr": "sum by (status) (memory_memories{project=~\"$project\"})",
           "legendFormat": "{{status}}"
         }
       ],

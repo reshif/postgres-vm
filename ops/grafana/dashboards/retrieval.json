@@ -1,7 +1,7 @@
 {
   "uid": "memory-retrieval",
   "title": "Memory — Retrieval & Context Packs",
-  "description": "The serving path. Panels are built around the production gate in 04-EVALUATION.md §7.3: p95 memory.context under 350 ms, and packs that are not silently degraded.",
+  "description": "The serving path. Performance gates are evaluated only when a request was observed, so an idle system reads as no traffic rather than a healthy or failing latency result.",
   "tags": [
     "memory-platform"
   ],
@@ -26,7 +26,7 @@
     {
       "type": "stat",
       "title": "p95 context pack latency",
-      "description": "The §7.3 gate is p95 < 350 ms sustained for 7 days. Thresholds are set at the gate, not at a round number.",
+      "description": "The §7.3 gate is p95 < 350 ms sustained for 7 days. No value means no completed context pack in the rolling window, not a passing result.",
       "gridPos": {
         "h": 5,
         "w": 6,
@@ -40,7 +40,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(memory_context_duration_seconds_bucket[5m])))",
+          "expr": "memory:context_latency_p95 >= 0",
           "legendFormat": "p95",
           "instant": true,
           "range": false
@@ -99,7 +99,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(memory_context_duration_seconds_count[5m])) * 60",
+          "expr": "memory:context_pack_observations_per_minute",
           "legendFormat": "packs/min",
           "instant": true,
           "range": false
@@ -207,7 +207,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(memory_context_pack_tokens_bucket[30m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(memory_context_pack_tokens_bucket[30m]))) >= 0",
           "legendFormat": "p50 tokens",
           "instant": true,
           "range": false
@@ -259,7 +259,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(memory_write_duration_seconds_bucket[10m])))",
+          "expr": "memory:write_latency_p99 >= 0",
           "legendFormat": "p99",
           "instant": true,
           "range": false
@@ -324,17 +324,17 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(memory_context_duration_seconds_bucket[5m])))",
+          "expr": "memory:context_latency_p50 >= 0",
           "legendFormat": "p50"
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(memory_context_duration_seconds_bucket[5m])))",
+          "expr": "memory:context_latency_p95 >= 0",
           "legendFormat": "p95"
         },
         {
           "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(memory_context_duration_seconds_bucket[5m])))",
+          "expr": "memory:context_latency_p99 >= 0",
           "legendFormat": "p99"
         }
       ],
@@ -379,7 +379,7 @@
     {
       "type": "timeseries",
       "title": "p95 by stage",
-      "description": "profile / embed / search / rerank / assemble. A slow pack is almost always embed or rerank — both are off-box calls.",
+      "description": "profile / embed / search / rerank / assemble. Percentiles are independent timings and must not be stacked: a stacked p95 invents a total that no request experienced.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -393,7 +393,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(memory_context_stage_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(memory_context_stage_duration_seconds_bucket[5m]))) >= 0",
           "legendFormat": "{{stage}}"
         }
       ],
@@ -405,7 +405,7 @@
             "lineWidth": 2,
             "fillOpacity": 10,
             "stacking": {
-              "mode": "normal"
+              "mode": "none"
             },
             "showPoints": "never"
           },
@@ -461,7 +461,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le, arm) (rate(memory_retrieval_arm_hits_bucket[10m])))",
+          "expr": "histogram_quantile(0.5, sum by (le, arm) (rate(memory_retrieval_arm_hits_bucket[10m]))) >= 0",
           "legendFormat": "{{arm}}"
         }
       ],

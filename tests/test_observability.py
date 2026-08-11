@@ -347,11 +347,13 @@ def main() -> None:
 
     dangling: list[str] = []
     panels_checked = 0
+    dashboard_models: dict[str, dict] = {}
     for uid in ("memory-retrieval", "memory-curation", "memory-operations"):
         try:
             dash = get_json(GRAFANA + f"/api/dashboards/uid/{uid}")["dashboard"]
         except (urllib.error.URLError, OSError, KeyError):
             continue
+        dashboard_models[uid] = dash
         for panel in dash.get("panels", []):
             if panel.get("type") == "row":
                 continue
@@ -363,6 +365,42 @@ def main() -> None:
     check("every panel was inspected", panels_checked > 15, f"{panels_checked} panels")
     check("no panel references a datasource that does not exist",
           not dangling, "; ".join(dangling[:3]) or "all resolve")
+
+    def panel(uid: str, title: str) -> dict:
+        return next((item for item in dashboard_models.get(uid, {}).get("panels", [])
+                     if item.get("title") == title), {})
+
+    retrieval = panel("memory-retrieval", "Latency percentiles")
+    retrieval_exprs = {target.get("expr") for target in retrieval.get("targets", [])}
+    stage = panel("memory-retrieval", "p95 by stage")
+    check("retrieval latency treats no traffic as no sample",
+          {"memory:context_latency_p50 >= 0", "memory:context_latency_p95 >= 0",
+           "memory:context_latency_p99 >= 0"} <= retrieval_exprs,
+          str(sorted(expression for expression in retrieval_exprs if expression))[:100])
+    check("stage percentiles are not stacked into a fictional total",
+          stage.get("fieldConfig", {}).get("defaults", {}).get("custom", {}).get(
+              "stacking", {}).get("mode") == "none")
+
+    curation = dashboard_models.get("memory-curation", {})
+    curation_project = next((item for item in curation.get("templating", {}).get("list", [])
+                             if item.get("name") == "project"), {})
+    curation_expr = next(iter(panel("memory-curation", "Review backlog (selected)")
+                              .get("targets", [])), {}).get("expr", "")
+    check("curation dashboard selects project-scoped gauges",
+          curation_project.get("allValue") == ".*" and "$project" in curation_expr,
+          curation_expr)
+
+    reranker_exprs = {target.get("expr") for target in
+                      panel("memory-operations", "Reranker contract").get("targets", [])}
+    check("operations dashboard uses the API reranker decision",
+          "memory_rerank_enabled{job=\"memory-api\"}" in reranker_exprs,
+          str(sorted(expression for expression in reranker_exprs if expression)))
+    warning_exprs = {target.get("expr") for target in
+                     panel("memory-operations", "Warning alerts").get("targets", [])}
+    check("operations dashboard separates warning severity",
+          "count(ALERTS{alertstate=\"firing\",severity=\"warning\"}) or vector(0)"
+          in warning_exprs,
+          str(sorted(expression for expression in warning_exprs if expression)))
 
     # ---- 8. alerting has a delivery path and reports failure ---------------
     print("\n8. Alerts route somewhere and report delivery failures")
@@ -380,6 +418,14 @@ def main() -> None:
     check("recording rules pre-compute the gates",
           rule_types.get("recording", 0) >= 8, str(rule_types))
     check("alert rules are loaded", rule_types.get("alerting", 0) >= 8, str(rule_types))
+
+    recording_rules = Path("/repo/ops/recording-rules.yml").read_text()
+    alert_rules = Path("/repo/ops/alerts.yml").read_text()
+    check("traffic latency gates require an observed request",
+          "memory:context_pack_observations_per_minute > 0" in recording_rules
+          and "memory:write_observations_per_minute > 0" in recording_rules
+          and "memory:context_pack_observations_per_minute > 0" in alert_rules,
+          "idle histograms must not spend the latency error budget")
 
     try:
         am_ok = get_json(ALERTMANAGER + "/api/v2/status")
