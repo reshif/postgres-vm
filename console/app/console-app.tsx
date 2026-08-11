@@ -34,20 +34,37 @@ type Dashboard = {
 };
 type ErrorBoxProps = { error: unknown };
 
-const nav: Array<{ href: string; view: View; label: string; icon: typeof BookOpen }> = [
-  { href: "/inbox/", view: "inbox", label: "Inbox", icon: ShieldCheck },
-  { href: "/knowledge/", view: "knowledge", label: "Explorer", icon: BookOpen },
-  { href: "/procedures/", view: "procedures", label: "Procedures", icon: ListChecks },
-  { href: "/graph/", view: "graph", label: "Graph", icon: Network },
-  { href: "/timeline/", view: "timeline", label: "Timeline", icon: Clock3 },
-  { href: "/conflicts/", view: "conflicts", label: "Conflicts", icon: GitCompareArrows },
-  { href: "/debug/", view: "debug", label: "Debugger", icon: Bug },
-  { href: "/health/", view: "health", label: "Health", icon: Activity },
-  { href: "/evals/", view: "evals", label: "Evals", icon: Sparkles },
-  { href: "/settings/", view: "settings", label: "Settings", icon: Settings2 },
-  { href: "/audit/", view: "audit", label: "Audit", icon: ShieldEllipsis },
-  { href: "/admin/", view: "admin", label: "Admin", icon: Users }
+type NavGroup = "Knowledge" | "Operations" | "Governance";
+const nav: Array<{ href: string; view: View; label: string; icon: typeof BookOpen; group: NavGroup }> = [
+  { href: "/inbox/", view: "inbox", label: "Inbox", icon: ShieldCheck, group: "Knowledge" },
+  { href: "/knowledge/", view: "knowledge", label: "Explorer", icon: BookOpen, group: "Knowledge" },
+  { href: "/procedures/", view: "procedures", label: "Procedures", icon: ListChecks, group: "Knowledge" },
+  { href: "/graph/", view: "graph", label: "Graph", icon: Network, group: "Knowledge" },
+  { href: "/timeline/", view: "timeline", label: "Timeline", icon: Clock3, group: "Knowledge" },
+  { href: "/conflicts/", view: "conflicts", label: "Conflicts", icon: GitCompareArrows, group: "Operations" },
+  { href: "/debug/", view: "debug", label: "Debugger", icon: Bug, group: "Operations" },
+  { href: "/health/", view: "health", label: "Health", icon: Activity, group: "Operations" },
+  { href: "/evals/", view: "evals", label: "Evals", icon: Sparkles, group: "Operations" },
+  { href: "/settings/", view: "settings", label: "Settings", icon: Settings2, group: "Governance" },
+  { href: "/audit/", view: "audit", label: "Audit", icon: ShieldEllipsis, group: "Governance" },
+  { href: "/admin/", view: "admin", label: "Admin", icon: Users, group: "Governance" }
 ];
+
+const viewMeta: Record<View, { section: string; description: string }> = {
+  overview: { section: "Project intelligence", description: "Demand, evidence coverage, and review work for this scoped project." },
+  inbox: { section: "Curation", description: "Review proposed knowledge before it can influence retrieval." },
+  knowledge: { section: "Project memory", description: "Search, verify, and maintain the evidence available to agents." },
+  procedures: { section: "Project memory", description: "Reviewed runbooks and their observed use in this project." },
+  graph: { section: "Project memory", description: "Bounded relationships, always tied to recorded evidence." },
+  timeline: { section: "Project memory", description: "Inspect valid time separately from the time knowledge was recorded." },
+  conflicts: { section: "Curation", description: "Resolve competing claims with a durable audit decision." },
+  debug: { section: "Retrieval operations", description: "Replay what the retrieval system examined, selected, and excluded." },
+  health: { section: "Retrieval operations", description: "Know whether this project has enough healthy, governed knowledge." },
+  evals: { section: "Retrieval operations", description: "Track comparable retrieval-quality evaluations over time." },
+  settings: { section: "Governance", description: "Inspect policy-bearing project configuration and capacity signals." },
+  audit: { section: "Governance", description: "Review the immutable project-scoped operational trail." },
+  admin: { section: "Governance", description: "See the projects available to the current principal." }
+};
 
 const trustClass = (tier?: string | null) => `trust trust-${tier || "observed"}`;
 const tierClass = (tier?: string | null) => `tier-${tier || "observed"}`;
@@ -237,36 +254,45 @@ export function ConsoleApp({ view }: { view: View }) {
 
 function ConsoleLayout({ view }: { view: View }) {
   const { scope, setScope } = useScope();
+  const client = useQueryClient();
+  const [refreshing, setRefreshing] = useState(false);
   if (!scope) return null;
+  const meta = viewMeta[view];
+  const refresh = async () => {
+    setRefreshing(true);
+    try { await client.invalidateQueries(); } finally { window.setTimeout(() => setRefreshing(false), 250); }
+  };
   return <div className="console-shell">
     <aside className="sidebar">
-      <Link href="/" className="brand"><Database size={18} /><span>Knowledge Console</span></Link>
+      <Link href="/" className="brand"><span className="brand-mark"><Database size={17} /></span><span><strong>Knowledge Console</strong><small>Project memory</small></span></Link>
       <ScopeSwitcher scope={scope} />
       <nav aria-label="Console navigation">
-        {nav.map(item => {
+        {(["Knowledge", "Operations", "Governance"] as NavGroup[]).map(group => <div className="nav-group" key={group}><span>{group}</span>{nav.filter(item => item.group === group).map(item => {
           const Icon = item.icon;
           return <Link key={item.view} href={item.href} className={view === item.view ? "nav-link active" : "nav-link"}>
-            <Icon size={16} />{item.label}
+            <Icon size={16} /><span>{item.label}</span>
           </Link>;
-        })}
+        })}</div>)}
       </nav>
       <div className="sidebar-foot"><span className="status-dot" />RLS-scoped{scope.access_token && <button className="icon-button quiet" aria-label="Sign out" title="Sign out" onClick={() => { window.sessionStorage.removeItem(OAUTH_TOKEN_KEY); window.localStorage.removeItem("scope"); setScope(null); }}><LogOut size={15} /></button>}</div>
     </aside>
     <main className="workspace">
-      <header className="topbar"><div><span className="eyebrow">Memory platform</span><h1>{view === "knowledge" ? "Knowledge Explorer" : nav.find(item => item.view === view)?.label || "Overview"}</h1></div><TimeCursor /></header>
-      {view === "overview" && <Overview scope={scope} />}
-      {view === "inbox" && <Inbox scope={scope} />}
-      {view === "knowledge" && <Explorer scope={scope} />}
-      {view === "procedures" && <Procedures scope={scope} />}
-      {view === "graph" && <GraphView scope={scope} />}
-      {view === "timeline" && <Timeline scope={scope} />}
-      {view === "conflicts" && <Conflicts scope={scope} />}
-      {view === "debug" && <Debugger scope={scope} />}
-      {view === "health" && <Health scope={scope} />}
-      {view === "evals" && <Evals scope={scope} />}
-      {view === "settings" && <Settings scope={scope} />}
-      {view === "audit" && <Audit scope={scope} />}
-      {view === "admin" && <Admin scope={scope} />}
+      <header className="topbar"><div className="topbar-title"><span className="eyebrow">{meta.section}</span><h1>{view === "knowledge" ? "Knowledge Explorer" : nav.find(item => item.view === view)?.label || "Overview"}</h1><p>{meta.description}</p></div><div className="topbar-actions"><TimeCursor /><button className="icon-button" aria-label="Refresh project data" title="Refresh project data" onClick={() => void refresh()} disabled={refreshing}><RefreshCw className={refreshing ? "spin" : ""} size={15} /></button></div></header>
+      <div className="workspace-content">
+        {view === "overview" && <Overview scope={scope} />}
+        {view === "inbox" && <Inbox scope={scope} />}
+        {view === "knowledge" && <Explorer scope={scope} />}
+        {view === "procedures" && <Procedures scope={scope} />}
+        {view === "graph" && <GraphView scope={scope} />}
+        {view === "timeline" && <Timeline scope={scope} />}
+        {view === "conflicts" && <Conflicts scope={scope} />}
+        {view === "debug" && <Debugger scope={scope} />}
+        {view === "health" && <Health scope={scope} />}
+        {view === "evals" && <Evals scope={scope} />}
+        {view === "settings" && <Settings scope={scope} />}
+        {view === "audit" && <Audit scope={scope} />}
+        {view === "admin" && <Admin scope={scope} />}
+      </div>
     </main>
   </div>;
 }
@@ -298,6 +324,7 @@ function Overview({ scope }: { scope: Scope }) {
   const gaps = demand.top_questions.filter(item => item.answerability === "no_relevant_evidence" || item.answerability === "partial_support");
   return <section className="overview-grid knowledge-dashboard">
     <section className="metric-band"><div className="metric"><span>Health</span><strong>{health.data.health}<small>/100</small></strong></div><div className="metric"><span>Active knowledge</span><strong>{health.data.counts.active}</strong></div><div className="metric"><span>Questions, {demand.window_days}d</span><strong>{demand.summary.questions}</strong></div><div className="metric"><span>Retrievals, {demand.window_days}d</span><strong>{demand.summary.requests}</strong></div><div className="metric"><span>Review backlog</span><strong>{inbox.data.backlog}</strong></div></section>
+    <section className="focus-strip" aria-label="Project attention"><Link className={inbox.data.backlog ? "focus-item attention" : "focus-item"} href="/inbox/"><span>Review work</span><strong>{inbox.data.backlog ? `${inbox.data.backlog} waiting` : "Queue clear"}</strong><small>{inbox.data.oldest_days ? `Oldest candidate ${inbox.data.oldest_days}d` : "No candidate is waiting"}</small></Link><Link className={gaps.length ? "focus-item attention" : "focus-item"} href="/debug/"><span>Evidence gaps</span><strong>{gaps.length ? `${gaps.length} need review` : "Evidence holding"}</strong><small>{gaps.length ? "Inspect unanswered demand" : "No recurring gap recorded"}</small></Link><Link className="focus-item" href="/health/"><span>Knowledge health</span><strong>{health.data.health >= 90 ? "Healthy" : "Needs attention"}</strong><small>{health.data.counts.active} active records in scope</small></Link></section>
     <section className="panel demand-panel"><div className="panel-head"><div><h2>Knowledge demand</h2><p className="muted">Questions sent to this project&apos;s memory in the last {demand.window_days} days.</p></div><Link href="/debug/">Inspect retrieval <ArrowUpRight size={14} /></Link></div><DemandTrend points={demand.trend} /></section>
     <section className="panel dashboard-list"><div className="panel-head"><div><h2>Most asked questions</h2><p className="muted">Demand is grouped by the exact project-scoped request.</p></div><Link href="/audit/">Audit <ArrowUpRight size={14} /></Link></div>{demand.top_questions.length ? demand.top_questions.map(item => <div className="demand-row" key={item.query_text}><div><span className="demand-title" title={item.query_text}>{item.query_text}</span><small>Last asked {formatDate(item.last_asked_at)}</small></div><div className="demand-count"><span className={`answerability answerability-${item.answerability}`}>{answerabilityLabel(item.answerability)}</span><strong>{item.requests}</strong><small>asks</small></div></div>) : <p className="panel-summary">No retrieval events have been recorded for this project.</p>}</section>
     <section className="panel dashboard-list"><div className="panel-head"><div><h2>Knowledge used</h2><p className="muted">The memories actually returned to agents, not a popularity estimate.</p></div><Link href="/knowledge/">Explore <ArrowUpRight size={14} /></Link></div>{demand.top_knowledge.length ? demand.top_knowledge.map(item => <div className={`demand-row ${tierClass(item.tier)}`} key={item.id}><div><span className="demand-title" title={item.title}>{item.title}</span><small>{item.type} · last returned {formatDate(item.last_used_at)}</small></div><div className="demand-count"><strong>{item.requests}</strong><small>returns</small></div></div>) : <p className="panel-summary">No memory has been returned in this period.</p>}</section>
@@ -364,7 +391,7 @@ function Inbox({ scope }: { scope: Scope }) {
   }, [cursor, inbox.data, scope, lastDecision]);
   if (inbox.isLoading) return <Loading />;
   if (inbox.error) return <ErrorBox error={inbox.error} />;
-  return <section>{notice && <div id="toast" className="notice success" role="status"><Check size={16} />{notice}{lastDecision && <button onClick={() => void undo()}>Undo</button>}</div>}<div className="section-head"><div><p className="muted">{inbox.data.backlog} candidates, oldest {inbox.data.oldest_days}d</p><h2>Review queue</h2></div><span className="status-pill">{inbox.data.health}</span></div>
+  return <section>{notice && <div id="toast" className="notice success" role="status"><Check size={16} />{notice}{lastDecision && <button onClick={() => void undo()}>Undo</button>}</div>}<div className="section-head"><div><p className="muted">{inbox.data.backlog} candidates, oldest {inbox.data.oldest_days}d</p><h2>Review queue</h2></div><span className="status-pill">{inbox.data.health}</span></div><div className="review-summary" aria-label="Review queue summary"><div><span>Waiting</span><strong>{inbox.data.backlog}</strong></div><div><span>Oldest</span><strong>{inbox.data.oldest_days}d</strong></div><div><span>Queue state</span><strong>{inbox.data.health}</strong></div></div>
     <div className="queue">{inbox.data.items.length === 0 ? <div className="empty">No candidates waiting.</div> : inbox.data.items.map((item: any, index: number) => <article tabIndex={0} key={item.ref} className={`inbox-item ${tierClass(item.tier)} ${cursor === index ? "cursor" : ""}`} onFocus={() => setCursor(index)}><div className="item-top"><span className="kind">{item.kind}</span><span>{item.type}</span><span>{item.age_days}d old</span></div><h3>{item.title}</h3><p>{item.digest}</p>{item.why && <div className="flag"><AlertTriangle size={14} />{Array.isArray(item.why) ? item.why.join(", ") : JSON.stringify(item.why)}</div>}<div className="item-foot"><code>{item.source}{item.source_uri ? `:${item.source_uri}` : ""}</code>{item.kind === "conflict" ? <Link href="/conflicts/">Resolve conflict</Link> : <div className="actions"><button className="primary" onClick={() => void act(item.ref, "promote")}>Accept</button><button onClick={() => setRejecting(item.ref)}>Reject</button></div>}</div></article>)}</div>
     {rejecting && <div className="modal-backdrop" role="presentation"><dialog open><h2>Archive candidate</h2><p>Nothing is deleted. Select the reason recorded in the audit trail.</p><div className="actions">{["noise", "wrong", "already known", "too specific", "unsafe"].map(reason => <button key={reason} onClick={() => { void act(rejecting, "reject", reason); setRejecting(null); }}>{reason}</button>)}</div><button className="quiet" onClick={() => setRejecting(null)}>Cancel</button></dialog></div>}
   </section>;
