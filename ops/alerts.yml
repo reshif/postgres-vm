@@ -139,6 +139,22 @@ groups:
           summary: "{{ $labels.service }} event loop has not advanced for over 90 seconds"
           description: "The metrics endpoint may still answer; inspect blocked jobs, database waits, and process logs."
 
+      # ADR-0008: "an arm contributing under ~3% of returned items over a month
+      # should be removed rather than tuned". This is informational by design —
+      # it is a prompt to make an engineering decision, not an incident. The
+      # `evidence_sufficient` guard is what keeps it from firing on a quiet
+      # project where the arm simply has not been measured yet; without it the
+      # alert would recommend deleting retrieval arms on every new deployment.
+      - alert: RetrievalArmNotEarningItsPlace
+        expr: |
+          memory_retrieval_arm_unique_contribution < 0.03
+            and on (project) memory_retrieval_arm_evidence_sufficient == 1
+        for: 24h
+        labels: { severity: info }
+        annotations:
+          summary: "Retrieval arm {{ $labels.arm }} contributed under 3% of returned items"
+          description: "ADR-0008 says remove it rather than tune it. Check the participation gauge too: high participation with no unique contribution means redundant, not weak."
+
       - alert: AlertmanagerConfigReloadFailed
         expr: alertmanager_config_last_reload_successful == 0
         for: 2m

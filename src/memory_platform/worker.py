@@ -319,9 +319,16 @@ def _curation_sample() -> dict:
             " WHERE tenant_id = :t AND project_id = :p AND resolution IS NULL"),
             {"t": str(tenant), "p": str(project)}).scalar_one()
 
+        # ADR-0008's keep-or-cut rule needs a month of evidence, so the figure has
+        # to accumulate continuously. Sampled here, with the other aggregates,
+        # for the same NOBYPASSRLS reason.
+        from . import arms as _arms
+        arm_report = _arms.contribution(conn, tenant_id=tenant, project_id=project)
+
     slug = s.dev_project_id[:8]
     metrics.publish_curation(slug, status, counts)
     metrics.publish_conflicts(slug, open_conflicts)
+    metrics.publish_arm_contribution(slug, arm_report)
     return stats
 
 

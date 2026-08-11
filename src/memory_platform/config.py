@@ -117,6 +117,17 @@ class Settings(BaseSettings):
     distillation_output_dir: str = "/tmp/memory-distillation"
     distillation_remote: str = "origin"
 
+    # ADR-0008's keep-or-cut rule for retrieval arms: "an arm contributing under
+    # ~3% of returned items over a month should be removed rather than tuned".
+    # The floor and the window are the blueprint's; both are settings because the
+    # rule licenses DELETING an arm, and that decision should be made against
+    # numbers an operator chose rather than ones compiled in.
+    arm_contribution_floor: float = 0.03
+    arm_contribution_window_days: int = 30
+    # Below this many attributed events the report withholds its verdict instead
+    # of recommending deletion from a handful of queries.
+    arm_contribution_min_events: int = 200
+
     role: str = "api"
     log_level: str = "info"
     worker_queues: str = "embedding,ingestion,extraction"

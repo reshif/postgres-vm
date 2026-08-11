@@ -161,6 +161,37 @@ if _AVAILABLE:
         "1 when the API is configured to depend on the cross-encoder reranker.",
     )
 
+    # ------------------------------------------------- retrieval arm value
+    # ADR-0008 commits to REMOVING an arm that contributes under ~3% of returned
+    # items over a month. That is a commitment to delete code, so the number
+    # behind it has to be visible continuously rather than computed once when
+    # somebody remembers to ask.
+    ARM_CONTRIBUTION = Gauge(
+        "memory_retrieval_arm_contribution",
+        "Share of returned items this arm surfaced, over the ADR-0008 window. "
+        "Participation: other arms may have surfaced the same item.",
+        ["project", "arm"],
+    )
+    ARM_UNIQUE_CONTRIBUTION = Gauge(
+        "memory_retrieval_arm_unique_contribution",
+        "Share of returned items ONLY this arm surfaced. This is what would be "
+        "lost by cutting the arm, and the figure ADR-0008's 3% floor applies to.",
+        ["project", "arm"],
+    )
+    ARM_EVIDENCE_SUFFICIENT = Gauge(
+        "memory_retrieval_arm_evidence_sufficient",
+        "1 when enough attributed retrievals exist for the contribution figures "
+        "to mean anything. At 0 an arm reading 0%% has not been measured, which "
+        "is not the same as earning nothing.",
+        ["project"],
+    )
+    ARM_ATTRIBUTION_COVERAGE = Gauge(
+        "memory_retrieval_arm_attribution_coverage",
+        "Fraction of retrieval events in the window carrying per-item arm "
+        "attribution.",
+        ["project"],
+    )
+
 
 def _labels(*values: Any) -> tuple[str, ...]:
     """Labels must be low-cardinality strings; None would create a series per null."""
@@ -276,6 +307,31 @@ def publish_curation(project: str, status: dict[str, Any],
             MEMORY_COUNT.labels(*_labels(project, status_name)).set(n or 0)
     except Exception as exc:  # noqa: BLE001
         log.debug("curation gauges skipped: %s", exc)
+
+
+def publish_arm_contribution(project: str, report: dict[str, Any]) -> None:
+    """Publish the ADR-0008 keep-or-cut measurement for each retrieval arm.
+
+    Published from the scheduler for the same reason the curation gauges are: it
+    is an aggregate across a window that the API, which is NOBYPASSRLS and holds
+    no scope on a scrape, cannot compute.
+    """
+    if not _AVAILABLE:
+        return
+    try:
+        for arm, stats in (report.get("arms") or {}).items():
+            ARM_CONTRIBUTION.labels(*_labels(project, arm)).set(stats["share"])
+            ARM_UNIQUE_CONTRIBUTION.labels(*_labels(project, arm)).set(
+                stats["unique_share"])
+        # Without this, an arm reading 0.0 because nothing has been measured is
+        # indistinguishable on a dashboard from one reading 0.0 because it earns
+        # nothing — and those call for opposite actions.
+        ARM_EVIDENCE_SUFFICIENT.labels(*_labels(project)).set(
+            1 if report.get("sufficient_evidence") else 0)
+        ARM_ATTRIBUTION_COVERAGE.labels(*_labels(project)).set(
+            report.get("attribution_coverage") or 0)
+    except Exception as exc:  # noqa: BLE001
+        log.debug("arm contribution gauges skipped: %s", exc)
 
 
 def publish_conflicts(project: str, open_count: int) -> None:

@@ -26,7 +26,7 @@ else
   exit 1
 fi
 
-SUITES="test_rls_coverage test_isolation test_write_path test_ingest test_context test_planner test_evidence test_hybrid_lexical test_capture test_binding test_cli test_entities test_injection test_conflicts test_inbox test_extraction test_temporal test_console_data test_evaluations test_maintenance test_consolidation test_distillation test_limits test_auth test_mcp test_eval_snapshot test_eval_cases test_eval_export test_eval_latency_gate test_observability"
+SUITES="test_rls_coverage test_isolation test_write_path test_ingest test_context test_planner test_evidence test_hybrid_lexical test_capture test_binding test_cli test_entities test_injection test_conflicts test_inbox test_extraction test_temporal test_console_data test_evaluations test_maintenance test_consolidation test_distillation test_arms test_limits test_auth test_mcp test_eval_snapshot test_eval_cases test_eval_export test_eval_latency_gate test_observability"
 FAILED=""
 
 # Ordered deliberately: RLS coverage runs FIRST. It is the structural check, and

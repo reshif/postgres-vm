@@ -385,7 +385,13 @@ def _always_included(
 
 def _allocate(kept: list[dict], budget: int,
               preset: list[dict] | None = None) -> tuple[dict[str, list], list[dict]]:
-    """Fill sections in priority order under a per-section token cap."""
+    """Fill sections in priority order under a per-section token cap.
+
+    Packs are digest-first.  The cap must therefore account for the compact
+    representation sent to the agent, not the source document's full token
+    count.  Charging the source size made a 2,000-token ADR impossible to
+    include even though its 100-token digest was the only thing emitted.
+    """
     caps = {s: max(1, int(budget * ALLOCATION[s])) for s in SECTION_ORDER}
     caps["constraints"] = max(caps["constraints"], CONSTRAINTS_FLOOR)
 
@@ -400,12 +406,12 @@ def _allocate(kept: list[dict], budget: int,
         sections["constraints"].append(_render({**item, "score": 1.0,
                                                 "score_parts": {"always": 1.0},
                                                 "context_role": "baseline"}))
-        used["constraints"] += int(item.get("token_cost") or 0)
+        used["constraints"] += _render_cost(item)
 
     for item in kept:
         sec = "contested" if item.get("status") == "disputed" else \
               SECTION_BY_TYPE.get(item.get("type", ""), "recent")
-        cost = int(item.get("token_cost") or 0)
+        cost = _render_cost(item)
 
         # Rule 3: contested is never dropped for budget. It is capped at 5% of
         # the pack, but a conflict that does not fit displaces the cheapest
@@ -415,7 +421,7 @@ def _allocate(kept: list[dict], budget: int,
             used[sec] += cost
             while used[sec] > caps[sec] and sections["recent"]:
                 victim = sections["recent"].pop()
-                used["recent"] -= int(victim.get("token_cost") or 0)
+                used["recent"] -= _render_cost(victim)
                 dropped.append({**victim, "dropped_reason":
                                 "displaced by a contested item (never dropped, §5.4 rule 3)"})
                 break
@@ -429,6 +435,19 @@ def _allocate(kept: list[dict], budget: int,
         used[sec] += cost
 
     return sections, dropped
+
+
+def _render_cost(item: dict) -> int:
+    """Estimate the tokens emitted for one digest-first pack item.
+
+    The original ``token_cost`` remains the source-document size and is exposed
+    separately.  It is useful to decide whether an agent should expand a ref,
+    but it cannot be used to budget a payload that never contains the source.
+    The small fixed allowance covers keys, section framing, trust and score
+    metadata which are present in the structured response but not in prose.
+    """
+    text = "\n".join(str(item.get(field) or "") for field in ("title", "digest"))
+    return max(1, memories.count_tokens(text) + 12)
 
 
 def _render(item: dict) -> dict:
@@ -449,7 +468,8 @@ def _render(item: dict) -> dict:
         "trust": item.get("tier"),
         "type": item.get("type"),
         "src": src,
-        "token_cost": item.get("token_cost"),
+        "token_cost": _render_cost(item),
+        "source_token_cost": item.get("token_cost"),
         "score": round(item.get("score", 0.0), 5),
         "score_parts": item.get("score_parts"),
         "also_seen_in": item.get("also_seen_in", []),
@@ -457,6 +477,19 @@ def _render(item: dict) -> dict:
         "context_role": item.get("context_role", "evidence"),
         "evidence": item.get("evidence"),
     }
+
+
+# The five arms of ADR-0008, paired with the rank column each one sets in
+# mem.search_hybrid. One list, because the arm names in metrics, in the stored
+# retrieval event and in the contribution report have to be the same strings or
+# the "is this arm earning its place" question is asked of three different sets.
+ARM_RANK_KEYS: tuple[tuple[str, str], ...] = (
+    ("vector", "r_vec"),
+    ("lexical", "r_lex"),
+    ("identifier", "r_ident"),
+    ("graph", "r_graph"),
+    ("temporal", "r_time"),
+)
 
 
 def _log_event(conn: Connection, **kw: Any) -> None:
@@ -467,13 +500,8 @@ def _log_event(conn: Connection, **kw: Any) -> None:
     decomposition was stored at the time — recomputing it later would use
     whatever the weights are *now*, which is precisely the question being asked.
     """
-    arm_results = {
-        "vector": sum(1 for r in kw["ranked"] if r.get("r_vec")),
-        "lexical": sum(1 for r in kw["ranked"] if r.get("r_lex")),
-        "identifier": sum(1 for r in kw["ranked"] if r.get("r_ident")),
-        "graph": sum(1 for r in kw["ranked"] if r.get("r_graph")),
-        "temporal": sum(1 for r in kw["ranked"] if r.get("r_time")),
-    }
+    arm_results = {arm: sum(1 for r in kw["ranked"] if r.get(key))
+                   for arm, key in ARM_RANK_KEYS}
     # Recorded here rather than from the returned pack, because the pack does
     # not carry per-arm counts — they are computed for the retrieval_event and
     # nowhere else. Without this the "an arm is contributing nothing" panel is
@@ -483,8 +511,17 @@ def _log_event(conn: Connection, **kw: Any) -> None:
     from . import metrics as _metrics
     _metrics.record_arms(arm_results)
 
+    # WHICH arms surfaced each item, not just how many rows each arm produced.
+    # ADR-0008 says an arm contributing under ~3% of RETURNED ITEMS over a month
+    # should be removed rather than tuned, and that is unanswerable from candidate
+    # counts alone: an arm can produce 25 candidates every query and still be
+    # responsible for nothing that survives fusion. It is also unanswerable
+    # retrospectively — the ranks exist only inside the query that produced them,
+    # so if they are not written down here the month of evidence the decision
+    # needs never accumulates.
     fused = [{"id": str(r["id"]), "score": round(r.get("score", 0.0), 5),
-              "parts": r.get("score_parts"), "inputs": r.get("score_inputs")}
+              "parts": r.get("score_parts"), "inputs": r.get("score_inputs"),
+              "arms": [arm for arm, key in ARM_RANK_KEYS if r.get(key)]}
              for r in kw["ranked"][:40]]
     dropped = [{"id": str(d["id"]), "reason": d.get("dropped_reason")}
                for d in kw["dropped"]]
