@@ -310,14 +310,16 @@ def main() -> None:
     check("the retrieval dashboard is provisioned", "memory-retrieval" in uids,
           str(sorted(u for u in uids if u))[:60])
     check("the curation dashboard is provisioned", "memory-curation" in uids)
+    check("the operations dashboard is provisioned", "memory-operations" in uids)
 
     try:
         datasources = get_json(GRAFANA + "/api/datasources")
     except (urllib.error.URLError, OSError):
         datasources = []
     sources = {d["type"] for d in datasources}
-    check("both datasources are provisioned",
-          {"prometheus", "tempo"} <= sources, str(sorted(sources)))
+    check("metrics, traces, and Alertmanager datasources are provisioned",
+          {"prometheus", "tempo", "alertmanager"} <= sources,
+          str(sorted(sources)))
 
     # ---- 7. every panel actually points at a datasource that exists --------
     #
@@ -332,12 +334,12 @@ def main() -> None:
     print("\n7. Dashboard panels resolve against real datasources")
     known_uids = {d["uid"] for d in datasources}
     check("datasource uids are pinned, not generated",
-          "prometheus" in known_uids,
+          {"prometheus", "alertmanager"} <= known_uids,
           "unpinned uids break every provisioned dashboard")
 
     dangling: list[str] = []
     panels_checked = 0
-    for uid in ("memory-retrieval", "memory-curation"):
+    for uid in ("memory-retrieval", "memory-curation", "memory-operations"):
         try:
             dash = get_json(GRAFANA + f"/api/dashboards/uid/{uid}")["dashboard"]
         except (urllib.error.URLError, OSError, KeyError):

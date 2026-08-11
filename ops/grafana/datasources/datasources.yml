@@ -66,3 +66,16 @@ datasources:
           matcherType: regex
           matcherRegex: 'trace[_-]?id[=:"\s]+([a-f0-9]{32})'
           url: "${__value.raw}"
+
+  # Prometheus owns the alert rules while Alertmanager owns routing, grouping,
+  # silences, and delivery status. Provision both into Grafana so an operator
+  # can move from a firing alert to its routing state without memorising a
+  # second URL or configuring a datasource by hand after every rebuild.
+  - name: Alertmanager
+    uid: alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://alertmanager:9093
+    jsonData:
+      implementation: prometheus
+      handleGrafanaManagedAlerts: false

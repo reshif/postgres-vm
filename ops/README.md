@@ -170,13 +170,18 @@ it and back again. Postgres, PgBouncer and nginx will never speak OTLP; Promtail
 ships their container output into the same store, which is what you actually want
 at 3am. `{service="postgres"} |= "FATAL"` is one query.
 
-**Alerting.** Prometheus evaluates, Alertmanager notifies. The default receiver
-is a deliberately-named blackhole — alerts appear in Alertmanager and Grafana but
-page nobody until a receiver is configured in `ops/alertmanager.yml`. That is
-better than a config that pretends to page someone, which is discovered during an
-incident. Critical alerts route immediately; curation alerts (ADR-0015) are on a
-daily cadence because that failure mode plays out over weeks and paging for it at
-night trains people to ignore the channel.
+**Alerting.** Prometheus evaluates, Alertmanager groups and routes. The stack
+always exposes active alerts at `http://localhost:9093` and Grafana provisions
+that Alertmanager as a datasource. To notify people, set `ALERT_WEBHOOK_URL` in
+the untracked `.env` file to a relay that accepts the Alertmanager generic
+webhook payload. That relay can forward to Slack, Teams, PagerDuty, email, or an
+internal incident system. Leaving it blank is intentional for local development:
+alerts remain visible in the UIs, but no notification destination is claimed.
+The Operations dashboard shows both failed notification deliveries and the
+Alertmanager config-reload result, so a configured route is observable rather
+than assumed. Critical alerts route immediately; curation alerts (ADR-0015) are
+on a daily cadence because that failure mode plays out over weeks and paging for
+it at night trains people to ignore the channel.
 
 **Dashboards.** *Memory — Retrieval & Context Packs* covers the serving path:
 p95 pack latency against the 350 ms production gate, latency by stage, per-arm
@@ -185,8 +190,13 @@ dropped. *Memory — Curation & Trust* covers ADR-0015: review backlog against t
 100/200 thresholds, the extraction kill switch, acceptance rate against the
 30–85% band, and writes by assigned tier.
 
-Both are provisioned from `ops/grafana/dashboards/`. Edit the JSON and Grafana
-picks it up within 30 seconds — no restart, no re-import.
+*Memory - Operations & Alerts* is the incident entry point: firing alerts,
+every critical service contract, worker and scheduler loop liveness, database
+backend health, scrape target state, and Alertmanager delivery are all on one
+page. It links directly to Alertmanager, Prometheus targets, and the Knowledge
+Console. All three dashboards are provisioned from
+`ops/grafana/dashboards/`. Edit the JSON and Grafana picks it up within 30
+seconds — no restart, no re-import.
 
 **Where the metrics come from, and why it is split.** Request-time metrics come
 from the API, recorded from work already done for a caller who proved their
