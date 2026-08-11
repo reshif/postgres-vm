@@ -55,4 +55,25 @@ $DOCKER compose exec -T postgres psql -U memory_owner -d memory -q -c \
   "DELETE FROM mem.organizations WHERE slug IN
    ('tenant-a','tenant-b','tenant-c','leak-a','leak-b','ing','ctx','cap','ent','redteam','conf','ibx','temporal','maint','llmx')
    OR slug LIKE 'auth-%' OR slug LIKE 'cli-%' OR slug LIKE 'console-test-%' OR slug LIKE 'console-%' OR slug LIKE 'eval-ui-%' OR slug LIKE 'mcp-%' OR slug LIKE 'hybrid-%';
-   DELETE FROM mem.memories WHERE memory_key LIKE 'mcp-cross-client:%';" >/dev/null 2>&1 || true
+   DELETE FROM mem.memories WHERE memory_key LIKE 'mcp-cross-client:%'
+      OR content LIKE '%mcp-cross-client-%'
+      OR content LIKE '%mcp-fixture-%';
+   DELETE FROM mem.organizations WHERE slug IN ('consol','distill','orgent','armtest');
+   DELETE FROM mem.projects WHERE slug LIKE 'consol-p-%' OR slug LIKE 'distill-%'
+      OR slug LIKE 'orgent-%' OR slug LIKE 'arms-%' OR slug LIKE 'lonely-%';" \
+  >/dev/null 2>&1 || true
+
+# WHY THE CONTENT MATCH ABOVE, NOT JUST THE KEY.
+#
+# test_mcp writes most of its fixtures through the memory_write TOOL, which does
+# not accept a memory_key — the server derives one from the content hash
+# (`agent:<hash>`). So `memory_key LIKE 'mcp-cross-client:%'` matched exactly one
+# row per run and left the other five behind, quarantined, forever. The marker
+# those rows carry is in their CONTENT.
+#
+# That leak is not cosmetic. Quarantined rows are the review inbox, so every run
+# of this suite raised the inbox depth permanently: 54 of the 66 items sitting in
+# it were this, against 8 real ones. ADR-0015 alerts at depth 100 and the §7.3
+# production gate wants a 14-day median under 40 — both of which this would have
+# tripped, reporting a curation backlog that did not exist and burying the eight
+# items a curator actually needed to see.

@@ -19,6 +19,8 @@ Drop these into `.memory/decisions/` at the root of the memory-platform reposito
 | 0013 | Provider abstraction | accepted |
 | 0014 | Evaluation harness, permanent baseline, capability-scoped advantage | accepted |
 | 0015 | Curation capacity — owner as initial curator | accepted |
+| 0016 | Poll ingestion is the backstop, webhooks the optimisation | accepted |
+| 0017 | Phase 6 headline gate out of scope; single-operator tool | accepted |
 
 ---
 

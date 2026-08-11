@@ -31,7 +31,11 @@ from memory_platform import mrtr  # noqa: E402
 
 MCP = "http://mcp:8081/mcp"
 API = "http://api:8080"
-RUN = uuid.uuid4().hex[:8]
+# The marker run-all.sh cleans on. These fixtures are written through the
+# memory_write TOOL, which derives its own memory_key from the content hash, so
+# a key-prefix cleanup cannot find them — the marker has to be in the CONTENT or
+# they stay quarantined forever and inflate the review inbox.
+RUN = f"mcp-fixture-{uuid.uuid4().hex[:8]}"
 
 results: list[tuple[bool, str]] = []
 

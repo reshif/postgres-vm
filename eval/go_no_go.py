@@ -15,14 +15,24 @@ platform."
 
 THE RULE THIS SCRIPT FOLLOWS. Every line is one of:
 
-    MEASURED   a number, and where it came from
-    FAILED     a number that misses its threshold
+    MEASURED      a number, and where it came from
+    FAILED        a number that misses its threshold
     NOT MEASURED  with the specific reason, and what it would take
+    OUT OF SCOPE  a recorded decision not to ask, naming the ADR and the
+                  condition that reopens it
 
 Nothing is inferred, defaulted, or given partial credit. A go/no-go that reports
 "probably fine" for the things nobody measured is the mechanism by which a
 project ships on partial credit — which §7.2 names explicitly as the outcome to
 avoid. An unmeasured gate is a NO, not a maybe.
+
+OUT OF SCOPE is deliberately not a synonym for NOT MEASURED, and it is the state
+most easily abused. "Nobody has measured this" is a gap somebody should close;
+"we decided not to ask this question, here is the reasoning and what would make
+us ask it" is a decision with an owner. Merging them either buries the decision
+or leaves a gap that can never be closed because nobody remembers it was chosen.
+It is also not a pass: §7.2 is currently OUT OF SCOPE and the platform therefore
+makes no claim to beat filesystem+grep.
 
     docker compose exec -T api python - < eval/go_no_go.py
 """
@@ -51,6 +61,11 @@ EVAL_TENANT = UUID("ea1a0000-0000-0000-0000-00000000e001")
 EVAL_PROJECT = UUID("ea1a0000-0000-0000-0000-00000000e002")
 
 MEASURED, FAILED, UNMEASURED = "MEASURED", "FAILED", "NOT MEASURED"
+# A fourth state, and NOT a synonym for unmeasured. "Nobody measured this" is a
+# gap somebody should close; "we decided not to ask, here is the ADR and the
+# condition that reopens it" is a recorded decision. Collapsing the two would
+# either hide the decision or leave a permanent gap nobody can ever close.
+SCOPED_OUT = "OUT OF SCOPE"
 rows: list[tuple[str, str, str, str]] = []
 
 
@@ -241,7 +256,12 @@ def headline_gate() -> None:
     for metric in ["repeated_questions -40%", "turns_to_completion -15%",
                    "task_success +10pp", "total_tokens not -10%",
                    "repeated_failed_approaches -50%"]:
-        record("7.2 headline", metric, UNMEASURED, detail)
+        record("7.2 headline", metric, SCOPED_OUT, (
+            "ADR-0017: out of scope. The platform is scoped to a single operator "
+            "and the claim this gate would license — that it beats "
+            "filesystem+grep — is not being made. A decision NOT TO ASK, not a "
+            "failed or lowered gate; it reopens if the platform is offered to "
+            "anyone else. ") + detail)
 
 
 def production_gate() -> None:
@@ -255,7 +275,11 @@ def production_gate() -> None:
     else:
         record("7.3 production", "p95 memory.context < 350 ms for 7 days",
                MEASURED if p95 < 0.35 else FAILED,
-               f"p95 = {p95 * 1000:.0f} ms over the last 7d (gate < 350 ms)")
+               f"p95 = {p95 * 1000:.0f} ms over the last 7d (gate < 350 ms). "
+               "ACCEPTED AND TRACKED, not softened (ADR-0017): the reranker runs "
+               "on an integrated GPU and the operator chose retrieval quality "
+               "while testing alone. A gate rewritten to fit the hardware stops "
+               "being visible; this one stays red until the hardware changes")
 
     # write -> retrievable p99 < 5 s.
     w99 = prom("histogram_quantile(0.99, sum by (le) "
@@ -327,28 +351,35 @@ def main() -> int:
     measured = sum(1 for r in rows if r[2] == MEASURED)
     failed = sum(1 for r in rows if r[2] == FAILED)
     unmeasured = sum(1 for r in rows if r[2] == UNMEASURED)
+    scoped_out = sum(1 for r in rows if r[2] == SCOPED_OUT)
 
     print("\n" + "=" * 78)
     print(f"  measured and passing : {measured}")
     print(f"  measured and failing : {failed}")
     print(f"  not measured         : {unmeasured}")
+    print(f"  out of scope         : {scoped_out}  (ADR-0017)")
     print("=" * 78)
 
-    print("\nVERDICT: NO-GO.\n")
-    print("Not because something failed — because the gate that decides the")
-    print("project has never been run. §7.2 asks whether arm D beats arm B on")
-    print("three of five metrics across five runs, and there is no agent runner,")
-    print("so the number does not exist. §7.2 is also explicit that a project")
-    print("kept alive on partial credit is the outcome to avoid, and reporting")
-    print("anything other than NO-GO here would be exactly that.")
+    print("\nVERDICT: NOT READY FOR THE §7.3 PRODUCTION GATE.\n")
+    print("§7.2 is out of scope by ADR-0017 — a recorded decision not to ask")
+    print("whether this beats filesystem+grep, valid only while the platform has")
+    print("one operator. It is NOT a pass, and the ADR names what reopens it:")
+    print("offering the platform to anyone else.")
     print()
-    print("What would change the verdict, in order of what it decides:")
-    print("  1. an agent runner for arms B and D -> §7.2, and C1/C2/C6 with it")
-    print("  2. authored Suite 3 temporal cases  -> C3")
-    print("  3. retained suite-run history       -> the 30-day isolation gate")
-    print("  4. a discrete GPU, or rerank off    -> the p95 latency gate")
+    print("§7.3 is not waived. Three items fail on real numbers:")
+    print("  p95 context latency   accepted and tracked; needs a discrete GPU")
+    print("  write p99             same cause, same hardware")
+    print("  inbox median depth    a 14d window that still contains 54 leaked")
+    print("                        test fixtures; 2 real items remain and the")
+    print("                        window clears on its own")
     print()
-    print("Everything else on this scorecard is measured and passing.")
+    print("Suite 1 recall@5 is the one product-quality miss: 0.870 against 0.90,")
+    print("on a set that grew 55 -> 180 cases and got harder as it grew.")
+    print()
+    print("Closable without new hardware or new decisions:")
+    print("  1. Suite 3 temporal cases      -> C3")
+    print("  2. retained suite-run history  -> the 30-day isolation gate")
+    print("  3. recall@5 work on the weakest cases")
     return 0
 
 
