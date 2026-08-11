@@ -23,6 +23,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from pathlib import Path
 from uuid import UUID
 
 sys.path.insert(0, "/app/src")
@@ -38,6 +39,7 @@ PROM = "http://prometheus:9090"
 TEMPO = "http://tempo:3200"
 GRAFANA = "http://grafana:3000"
 SCHEDULER = "http://scheduler:9100"
+WORKER = "http://worker:9101"
 LOKI = "http://loki:3100"
 ALERTMANAGER = "http://alertmanager:9093"
 
@@ -144,13 +146,25 @@ def main() -> None:
           "memory_inbox_depth" not in families,
           "would require a BYPASSRLS connection in the serving process")
 
+    try:
+        worker = get(WORKER + "/metrics")
+    except (urllib.error.URLError, OSError) as exc:
+        worker = ""
+        check("the worker serves a metrics endpoint", False, str(exc)[:50])
+    else:
+        check("the worker serves a metrics endpoint", True)
+    check("worker publishes an event-loop heartbeat",
+          "memory_service_heartbeat_timestamp_seconds" in worker)
+
     # ---- 3. Prometheus is scraping all of it -------------------------------
     print("\n3. Prometheus is scraping every target")
     # Polled rather than sampled once. The scrape interval is 15 s, so a target
     # that restarted moments ago is legitimately DOWN for one cycle — and a gate
     # that fails whenever the stack was just rebuilt teaches people to re-run it
     # until it goes green, which is the same as not having it.
-    wanted = ("memory-api", "memory-scheduler", "otel-collector")
+    wanted = ("memory-api", "memory-scheduler", "memory-worker",
+              "blackbox-exporter", "service-probes", "tcp-service-probes",
+              "otel-collector")
     health: dict[str, str] = {}
     deadline = time.time() + 75
     while time.time() < deadline:
@@ -162,11 +176,41 @@ def main() -> None:
     for job in wanted:
         check(f"target {job} is up", health.get(job) == "up", f"{health.get(job)}")
 
+    # `up` only proves the exporter answered Prometheus. The blackbox result is
+    # the service-level contract: API readiness, console proxy, MCP upstream,
+    # database TCP paths, and each observability UI must all answer.
+    probes = {
+        row["metric"].get("service"): float(row["value"][1])
+        for row in promql("probe_success")
+        if row["metric"].get("service")
+    }
+    required_probes = {
+        "api", "console", "mcp", "postgres", "pgbouncer",
+        "otel-collector", "tempo", "loki", "prometheus",
+        "alertmanager", "grafana",
+    }
+    check("every required service has a synthetic probe",
+          required_probes <= set(probes), str(sorted(probes))[:100])
+    failed_probes = sorted(service for service in required_probes if probes.get(service) != 1)
+    check("every required service endpoint is healthy", not failed_probes,
+          ", ".join(failed_probes))
+
+    heartbeats = {
+        row["metric"].get("service"): float(row["value"][1])
+        for row in promql("memory_service_heartbeat_timestamp_seconds")
+    }
+    stale = sorted(service for service in ("worker", "scheduler")
+                   if time.time() - heartbeats.get(service, 0) > 90)
+    check("worker and scheduler heartbeats are fresh", not stale,
+          ", ".join(stale))
+
     rules = get_json(PROM + "/api/v1/rules")["data"]["groups"]
     rule_names = {r["name"] for g in rules for r in g["rules"]}
     check("alert rules are loaded", len(rule_names) >= 5, f"{len(rule_names)} rules")
     for want in ("ContextPackSlow", "ReviewBacklogGrowing",
-                 "ExtractionDisabledByKillSwitch"):
+                 "ExtractionDisabledByKillSwitch", "CriticalServiceEndpointDown",
+                 "ServiceHeartbeatStale", "PostgresUnavailable",
+                 "AlertNotificationDeliveryFailed"):
         check(f"alert {want} exists", want in rule_names)
 
     # ---- 4. a real request produces a real trace ---------------------------
@@ -310,11 +354,8 @@ def main() -> None:
     check("no panel references a datasource that does not exist",
           not dangling, "; ".join(dangling[:3]) or "all resolve")
 
-    # ---- 8. alerting actually notifies ------------------------------------
-    # Prometheus EVALUATES rules; it does not notify. With no Alertmanager
-    # registered, every rule transitions to firing and stops there — which is
-    # the state this stack shipped in: 8 rules, 0 alertmanagers.
-    print("\n8. Alerts route somewhere")
+    # ---- 8. alerting has a delivery path and reports failure ---------------
+    print("\n8. Alerts route somewhere and report delivery failures")
     ams = get_json(PROM + "/api/v1/alertmanagers")["data"]["activeAlertmanagers"]
     check("an Alertmanager is registered", len(ams) >= 1,
           str([a["url"] for a in ams])[:60])
@@ -336,6 +377,14 @@ def main() -> None:
               bool(am_ok.get("config", {}).get("original")), "")
     except (urllib.error.URLError, OSError) as exc:
         check("Alertmanager is healthy and has a config", False, str(exc)[:40])
+
+    alertmanager_metrics = get(ALERTMANAGER + "/metrics")
+    check("Alertmanager exposes notification delivery failures",
+          "alertmanager_notifications_failed_total" in alertmanager_metrics)
+    renderer = Path("/repo/ops/alertmanager/render-config.sh").read_text()
+    check("Alertmanager supports a configured outbound webhook",
+          "ALERT_WEBHOOK_URL" in renderer and "webhook_configs" in
+          Path("/repo/ops/alertmanager/webhook.yml").read_text())
 
     # ---- 9. logs exist at all ---------------------------------------------
     # The OTel logs pipeline exported to `debug`, which prints a summary line and

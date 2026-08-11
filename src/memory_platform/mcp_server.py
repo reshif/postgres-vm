@@ -430,3 +430,18 @@ def healthz() -> dict:
         "bound": bool(os.environ.get("MEMORY_OAUTH_ISSUER")
                       or (DEV_TENANT and DEV_PROJECT)),
     }
+
+
+@app.get("/readyz")
+def readyz(response: Response) -> dict:
+    """Only report ready when the stateless gateway can reach its sole dependency."""
+    try:
+        upstream = httpx.get(f"{API_URL}/readyz", timeout=3.0)
+        upstream.raise_for_status()
+        payload = upstream.json()
+        if not payload.get("ready"):
+            raise ValueError("API readiness payload was not ready")
+    except (httpx.HTTPError, ValueError) as exc:
+        response.status_code = 503
+        return {"ready": False, "api": API_URL, "detail": str(exc)}
+    return {"ready": True, "api": API_URL, "protocol": PROTOCOL_VERSION}

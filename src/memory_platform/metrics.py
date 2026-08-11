@@ -34,6 +34,7 @@ over its own listener.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 log = logging.getLogger("memory.metrics")
@@ -150,6 +151,15 @@ if _AVAILABLE:
     )
     MEMORY_COUNT = Gauge(
         "memory_memories", "Memories by status.", ["project", "status"])
+    SERVICE_HEARTBEAT = Gauge(
+        "memory_service_heartbeat_timestamp_seconds",
+        "Unix time when a long-running service last completed its event-loop heartbeat.",
+        ["service"],
+    )
+    RERANK_ENABLED = Gauge(
+        "memory_rerank_enabled",
+        "1 when the API is configured to depend on the cross-encoder reranker.",
+    )
 
 
 def _labels(*values: Any) -> tuple[str, ...]:
@@ -271,6 +281,17 @@ def publish_curation(project: str, status: dict[str, Any],
 def publish_conflicts(project: str, open_count: int) -> None:
     if _AVAILABLE:
         CONFLICTS_OPEN.labels(*_labels(project)).set(open_count)
+
+
+def heartbeat(service: str) -> None:
+    """Expose liveness of a service loop, not merely its metrics socket."""
+    if _AVAILABLE:
+        SERVICE_HEARTBEAT.labels(*_labels(service)).set(time.time())
+
+
+def set_rerank_enabled(enabled: bool) -> None:
+    if _AVAILABLE:
+        RERANK_ENABLED.set(1 if enabled else 0)
 
 
 def serve(port: int) -> bool:

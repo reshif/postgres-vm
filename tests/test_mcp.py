@@ -19,6 +19,7 @@ import uuid
 
 API = "http://localhost:8080"
 MCP = "http://mcp:8081/mcp"
+MCP_READY = "http://mcp:8081/readyz"
 RUN = uuid.uuid4().hex[:8]
 MARKER = f"mcp-cross-client-{RUN}"
 FOREIGN_MARKER = f"mcp-foreign-{RUN}"
@@ -83,6 +84,17 @@ def all_items(pack: dict) -> list[dict]:
 
 
 def main() -> None:
+    try:
+        with urllib.request.urlopen(MCP_READY, timeout=10) as response:
+            readiness = json.load(response)
+            ready_status = response.status
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+        readiness = {"detail": str(exc)}
+        ready_status = 0
+    check("MCP readiness verifies its API dependency",
+          ready_status == 200 and readiness.get("ready") is True,
+          str(readiness)[:140])
+
     binding = {key: os.environ.get(key, "") for key in (
         "MEMORY_DEV_TENANT_ID", "MEMORY_DEV_PROJECT_ID", "MEMORY_DEV_PRINCIPAL_ID")}
     check("the local MCP gateway has an explicit development binding", all(binding.values()))

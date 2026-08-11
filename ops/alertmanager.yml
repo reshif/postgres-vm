@@ -5,10 +5,10 @@
 # dedup, no silences, nobody told. `/api/v1/alertmanagers` reported zero active,
 # which is a smoke detector wired to nothing.
 #
-# THE DEFAULT RECEIVER IS DELIBERATELY A BLACKHOLE WITH A NAME THAT SAYS SO.
-# Shipping a config that pretends to page someone is worse than shipping one
-# that is honestly unconfigured — the first is discovered during an incident.
-# Set ALERT_SLACK_WEBHOOK (or replace the receiver) to make it real.
+# Local development has no notification destination. At startup,
+# render-config.sh adds the generic webhook stanza below each receiver when
+# ALERT_WEBHOOK_URL is supplied. Until then, alerts remain visible in the
+# Alertmanager UI but do not pretend to page anyone.
 
 global:
   resolve_timeout: 5m
@@ -51,16 +51,13 @@ inhibit_rules:
     equal: ["job"]
 
 receivers:
-  # Named so that a reader immediately knows notifications are not configured.
-  # Alerts still appear in Alertmanager's UI (:9093) and in Grafana.
+  # Alerts still appear in Alertmanager's UI (:9093) and in Grafana when no
+  # outbound receiver is configured.
   - name: default
+    # ALERT_WEBHOOK_CONFIG
 
   - name: critical
-    # Uncomment and set ALERT_SLACK_WEBHOOK in .env to route for real.
-    # slack_configs:
-    #   - api_url: ${ALERT_SLACK_WEBHOOK}
-    #     channel: "#memory-platform-alerts"
-    #     title: '{{ .CommonLabels.alertname }} ({{ .Status }})'
-    #     text: '{{ range .Alerts }}{{ .Annotations.summary }}\n{{ .Annotations.description }}{{ end }}'
+    # ALERT_WEBHOOK_CONFIG
 
   - name: curation
+    # ALERT_WEBHOOK_CONFIG

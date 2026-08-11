@@ -78,6 +78,82 @@ groups:
         annotations:
           summary: "Prometheus target {{ $labels.job }} is down"
 
+      # Metrics endpoints can remain reachable while an HTTP readiness route,
+      # reverse proxy, or upstream dependency is broken. Synthetic probes name
+      # the affected service directly and therefore catch the failure that made
+      # the Knowledge Console render a shell while every container was "Up".
+      - alert: CriticalServiceEndpointDown
+        expr: probe_success{criticality="critical"} == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Critical service {{ $labels.service }} failed its readiness probe"
+          description: "Check the service, its proxy, and the dependency named by its readiness contract."
+
+      - alert: ObservabilityEndpointDown
+        expr: probe_success{criticality="observability"} == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Observability service {{ $labels.service }} failed its readiness probe"
+          description: "The system may still serve traffic, but investigation evidence is at risk."
+
+      # The reranker is intentionally optional. It is an alert only when the
+      # API is configured to use it; otherwise a profile-gated container should
+      # not create a permanent false incident.
+      - alert: RerankerEndpointDown
+        expr: |
+          probe_success{service="reranker"} == 0
+            and on () memory_rerank_enabled == 1
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Enabled reranker failed its health probe"
+          description: "Retrieval will fall back to the base ranking path. Confirm the reranker model and container."
+
+      # Exporter reachability only proves that the exporter process is alive.
+      # These gauges perform the authenticated protocol check against the actual
+      # database and pool, which is what the API and workers depend on.
+      - alert: PostgresUnavailable
+        expr: pg_up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Postgres exporter cannot query the memory database"
+
+      - alert: PgBouncerUnavailable
+        expr: pgbouncer_up == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "PgBouncer exporter cannot query the pool"
+
+      # A process can keep an HTTP listener open while its work loop has stalled.
+      # The worker and scheduler move this timestamp only from their own event
+      # loops, so a stale value catches that distinct failure mode.
+      - alert: ServiceHeartbeatStale
+        expr: time() - memory_service_heartbeat_timestamp_seconds > 90
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "{{ $labels.service }} event loop has not advanced for over 90 seconds"
+          description: "The metrics endpoint may still answer; inspect blocked jobs, database waits, and process logs."
+
+      - alert: AlertmanagerConfigReloadFailed
+        expr: alertmanager_config_last_reload_successful == 0
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "Alertmanager failed to load its configuration"
+
+      - alert: AlertNotificationDeliveryFailed
+        expr: sum(increase(alertmanager_notifications_failed_total[15m])) > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "Alertmanager could not deliver one or more notifications"
+          description: "Check the configured webhook relay and its credentials before relying on paging."
+
   # ---------------------------------------------------------------------------
   # SLO burn rate.
   #

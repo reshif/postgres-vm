@@ -43,6 +43,7 @@ Instrumentator(
 # with nothing installed to emit a span. This is the line that makes the
 # pipeline carry data; it fails open if the collector is unreachable.
 telemetry.instrument_app(app)
+metrics.set_rerank_enabled(settings().rerank_enabled)
 
 # Graph endpoints live in their own router module. Two agents adding endpoints to
 # one file collided repeatedly; a router means each area owns its own file and

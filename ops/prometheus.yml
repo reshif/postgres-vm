@@ -37,6 +37,17 @@ scrape_configs:
     static_configs:
       - targets: ["scheduler:9100"]
 
+  # Workers are scaled with `docker compose up --scale worker=N`. Docker DNS
+  # publishes every replica as an A record, so discovery rather than one static
+  # target preserves per-replica alerting as the queue is scaled out.
+  - job_name: memory-worker
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names: ["worker"]
+        type: A
+        port: 9101
+        refresh_interval: 30s
+
   # The database is the single point of failure in this architecture: the queue,
   # the vectors, the isolation model and the audit log all live in it. Leaving it
   # unmonitored while charting application latency is watching the symptom.
@@ -49,6 +60,63 @@ scrape_configs:
   - job_name: pgbouncer
     static_configs:
       - targets: ["pgbouncer-exporter:9127"]
+
+  # First scrape the prober itself. Then each blackbox result carries the
+  # service label below, so an alert names the failed dependency rather than
+  # merely reporting that "some probe" is unhealthy.
+  - job_name: blackbox-exporter
+    static_configs:
+      - targets: ["blackbox-exporter:9115"]
+
+  - job_name: service-probes
+    metrics_path: /probe
+    params:
+      module: [http_ready]
+    static_configs:
+      - targets: ["http://api:8080/readyz"]
+        labels: { service: api, criticality: critical }
+      - targets: ["http://console:3000/readyz"]
+        labels: { service: console, criticality: critical }
+      - targets: ["http://mcp:8081/readyz"]
+        labels: { service: mcp, criticality: critical }
+      - targets: ["http://reranker:80/health"]
+        labels: { service: reranker, criticality: optional }
+      - targets: ["http://otel-collector:13133/"]
+        labels: { service: otel-collector, criticality: observability }
+      - targets: ["http://tempo:3200/ready"]
+        labels: { service: tempo, criticality: observability }
+      - targets: ["http://loki:3100/ready"]
+        labels: { service: loki, criticality: observability }
+      - targets: ["http://prometheus:9090/-/ready"]
+        labels: { service: prometheus, criticality: observability }
+      - targets: ["http://alertmanager:9093/-/ready"]
+        labels: { service: alertmanager, criticality: observability }
+      - targets: ["http://grafana:3000/api/health"]
+        labels: { service: grafana, criticality: observability }
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
+
+  - job_name: tcp-service-probes
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets: ["postgres:5432"]
+        labels: { service: postgres, criticality: critical }
+      - targets: ["pgbouncer:6432"]
+        labels: { service: pgbouncer, criticality: critical }
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox-exporter:9115
 
   # The observability stack has to be observable too. A silently dead collector
   # or a Loki rejecting writes both present as "the dashboards look fine".

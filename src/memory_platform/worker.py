@@ -159,10 +159,30 @@ def _ingest_git_commit(
 
 
 async def _run_worker() -> None:
+    from . import metrics as _metrics
+
     queues = [q.strip() for q in settings().worker_queues.split(",") if q.strip()]
     log.info("worker starting on queues: %s", queues)
-    async with app.open_async():
-        await app.run_worker_async(queues=queues)
+    _metrics.serve(int(os.environ.get("MEMORY_METRICS_PORT", "9101")))
+    pulse = asyncio.create_task(_heartbeat_loop("worker"))
+    try:
+        async with app.open_async():
+            await app.run_worker_async(queues=queues)
+    finally:
+        pulse.cancel()
+        try:
+            await pulse
+        except asyncio.CancelledError:
+            pass
+
+
+async def _heartbeat_loop(service: str) -> None:
+    """Keep a freshness signal moving while the service event loop is healthy."""
+    from . import metrics as _metrics
+
+    while True:
+        _metrics.heartbeat(service)
+        await asyncio.sleep(15)
 
 
 def _tree_fingerprint(root: Path) -> str:
@@ -318,22 +338,24 @@ async def _run_scheduler() -> None:
     webhook endpoint (POST /v1/ingest) exists for latency; this loop exists for
     correctness.
     """
+    from . import metrics as _metrics
+
     s = settings()
+    # Both enabled and intentionally-idle schedulers need a scrapeable liveness
+    # signal. Starting this after the feature guard made the target look down
+    # whenever poll ingestion was disabled.
+    _metrics.serve(int(os.environ.get("MEMORY_METRICS_PORT", "9100")))
     if not (s.ingest_enabled and s.dev_tenant_id and s.dev_project_id):
         log.info("scheduler: poll ingestion disabled "
                  "(set MEMORY_INGEST_ENABLED and the scope binding to turn it on)")
         while True:
+            _metrics.heartbeat("scheduler")
             await asyncio.sleep(3600)
 
     try:
         await asyncio.to_thread(_ensure_bound_scope)
     except Exception as exc:  # noqa: BLE001
         log.exception("could not verify the bound project, ingestion will retry: %s", exc)
-
-    # The scheduler has no HTTP server of its own, so it starts a listener purely
-    # for Prometheus. ops/prometheus.yml scrapes scheduler:9100.
-    from . import metrics as _metrics
-    _metrics.serve(int(os.environ.get("MEMORY_METRICS_PORT", "9100")))
 
     log.info("scheduler: polling %s/.memory every %ss",
              s.ingest_repo_path, s.ingest_interval_s)
@@ -344,6 +366,7 @@ async def _run_scheduler() -> None:
     # reflects the queue as it was late in the day rather than at midnight.
     sample_every = max(1, int(3600 / max(s.ingest_interval_s, 1)))
     while True:
+        _metrics.heartbeat("scheduler")
         try:
             fingerprint = await asyncio.to_thread(_poll_once, fingerprint)
         except Exception as exc:  # noqa: BLE001

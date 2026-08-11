@@ -1,0 +1,18 @@
+# HTTP and TCP probes used by the Prometheus service-probes jobs. These run from
+# inside the Compose network, so they catch broken DNS, upstream proxies and
+# readiness contracts that a host-side browser cannot see.
+modules:
+  http_ready:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+  tcp_connect:
+    prober: tcp
+    timeout: 5s
+    tcp:
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false

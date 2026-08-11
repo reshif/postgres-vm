@@ -4,11 +4,13 @@ The curation and debugging instrument for the memory platform. Built in Phase 5,
 Review Inbox first, per `03-FRONTEND-KNOWLEDGE-CONSOLE.md` §2.
 
 ```sh
-docker compose --profile console up -d --build console
+docker compose up -d --build console
 # http://localhost:3000
 ```
 
-Profile-gated, so `docker compose up` never depends on it.
+The console is part of the standard stack. Its `/readyz` proxy is synthetically
+probed from Prometheus, so an nginx shell that cannot reach the API is alerted
+as a console failure rather than treated as a healthy web server.
 
 ## What is here
 
@@ -65,8 +67,8 @@ supplied scope IDs cannot select another project.
 ## Tests
 
 ```sh
-docker compose --profile console up -d --build console
-sh tests/run-console.sh          # 33 assertions, real Chromium, real API
+docker compose up -d --build console
+sh tests/run-console.sh          # real Chromium, real API
 ```
 
 Runs Playwright from its own image on the compose network — no browser or Node

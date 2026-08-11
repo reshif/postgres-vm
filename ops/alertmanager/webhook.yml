@@ -1,0 +1,7 @@
+# Inserted below each receiver by render-config.sh only when
+# ALERT_WEBHOOK_URL is set. The endpoint must accept Alertmanager's generic
+# webhook JSON payload; use a small relay when the final destination is Slack,
+# Teams, PagerDuty, or email.
+    webhook_configs:
+      - url: "__ALERT_WEBHOOK_URL__"
+        send_resolved: true

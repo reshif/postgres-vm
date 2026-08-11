@@ -407,6 +407,8 @@ services:
       MEMORY_DATABASE_URL: postgresql+psycopg://memory_app:${DB_APP_PASSWORD:?set in .env}@postgres:5432/memory
       MEMORY_ROLE: worker
       MEMORY_WORKER_QUEUES: embedding,ingestion,extraction
+      # Internal-only Prometheus listener for event-loop heartbeats.
+      MEMORY_METRICS_PORT: "9101"
     # The `embedding` queue calls out to host Ollama.
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -420,6 +422,7 @@ services:
       <<: *common-env
       MEMORY_DATABASE_URL: postgresql+psycopg://memory_app:${DB_APP_PASSWORD:?set in .env}@postgres:5432/memory
       MEMORY_ROLE: scheduler        # consolidation, decay, conflicts, utility, reflection
+      MEMORY_METRICS_PORT: "9100"
       # Plane A poll ingestion. Off unless a scope binding exists — a background
       # loop has no request to carry a token, so ADR-0004's "identity from the
       # token" needs a service identity here eventually.
@@ -441,11 +444,9 @@ services:
 
   # ----------------------------------------------------------------- console
   console:
-    # Phase 5. There is no app in ./console yet, so this is profile-gated and does
-    # not run — `docker compose up` must not require a frontend that the build plan
-    # deliberately schedules later. Enable with:
-    #   docker compose --profile console up -d
-    profiles: ["console"]
+    # The operator console is a first-class runtime surface. Keeping it behind
+    # a profile meant the standard stack could look healthy while its human
+    # recovery interface was absent and therefore unmonitored.
     build: { context: ./console, dockerfile: Dockerfile }
     restart: unless-stopped
     environment:
@@ -461,6 +462,14 @@ services:
     restart: unless-stopped
     command: ["--config=/etc/otel/config.yaml"]
     volumes: ["./ops/otel-config.yaml:/etc/otel/config.yaml:ro"]
+
+  # Synthetic probes exercise actual readiness routes from inside the Compose
+  # network. A service can export metrics while its proxy or upstream is broken.
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes: ["./ops/blackbox.yml:/etc/blackbox/blackbox.yml:ro"]
 
   tempo:
     image: grafana/tempo:2.9.0
@@ -532,8 +541,16 @@ services:
   alertmanager:
     image: prom/alertmanager:v0.28.1
     restart: unless-stopped
+    # A generic webhook is optional locally. When ALERT_WEBHOOK_URL is supplied,
+    # the launch script inserts it into every routed receiver without committing
+    # a notification credential to this repository.
+    entrypoint: ["/bin/sh", "/etc/alertmanager/render-config.sh"]
+    environment:
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     volumes:
       - "./ops/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro"
+      - "./ops/alertmanager/webhook.yml:/etc/alertmanager/webhook.yml:ro"
+      - "./ops/alertmanager/render-config.sh:/etc/alertmanager/render-config.sh:ro"
       - "alertmanagerdata:/alertmanager"
     ports: ["9093:9093"]
 
@@ -562,6 +579,7 @@ services:
     ports: ["9090:9090"]
     depends_on:
       alertmanager: { condition: service_started }
+      blackbox-exporter: { condition: service_started }
 
   grafana:
     image: grafana/grafana:12.2.0
