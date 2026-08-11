@@ -70,6 +70,16 @@ TIER_BY_SOURCE: dict[str, str] = {
     "capture": "observed",
     "agent": "inferred",
     "extraction": "inferred",
+    # A consolidation summary is mechanically derived from memories that were
+    # already at `observed` or better (consolidation only ever reads active rows,
+    # and quarantined material is not active). It is deliberately pinned to
+    # `observed` rather than inheriting the best member's tier: the summary is
+    # extractive and reproducible, but it is still an aggregate nobody reviewed,
+    # so it must not be able to launder a group of verified memories into a
+    # verified claim of its own. It must also not land in quarantine — compaction
+    # archives the originals, so a quarantined summary would remove the whole
+    # group from retrieval and replace it with nothing.
+    "consolidation": "observed",
 }
 
 # Tier 1 and below never reach an agent as normal knowledge. ADR-0015 caps

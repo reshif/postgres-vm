@@ -219,7 +219,12 @@ def main() -> None:
     # that runs unattended.
     check("every maintenance step reported",
           set(out) == {"conflicts", "utility", "decay", "embeddings",
-                       "index_advice", "partitions"},
+                       "index_advice", "partitions",
+                       # Consolidation (§6.5) runs after decay: decay archives
+                       # unretrieved episodes first, so consolidation does not
+                       # spend similarity probes on rows already leaving
+                       # retrieval.
+                       "dedup", "compaction"},
           str(sorted(out)))
     check("the partition window is maintained", "created" in out.get("partitions", {}),
           str(out.get("partitions")))

@@ -89,6 +89,23 @@ class Settings(BaseSettings):
     # would otherwise turn one session into forty inbox items.
     llm_max_candidates: int = 5
 
+    # Consolidation (00-MASTER-BLUEPRINT §6.5). The blueprint's ">= 20 similar
+    # episodes older than 30 days" is right for a busy project and wrong for a
+    # new one, where it means the pass never fires and the feature quietly does
+    # not exist. Defaults follow the blueprint; every one is a knob, and each run
+    # records the values it used so old audit rows stay interpretable.
+    consolidation_enabled: bool = True
+    # Tighter than retrieval's MMR dedup (0.94) on purpose: MMR hides one result
+    # from one response, this archives a row.
+    consolidation_dedup_cosine: float = 0.97
+    consolidation_compact_cosine: float = 0.88
+    consolidation_min_episodes: int = 20
+    consolidation_age_days: int = 30
+    # Bounds one pass. Consolidation is O(n) similarity probes against an index
+    # and runs on the scheduler alongside everything else; an unbounded first run
+    # on a large project would hold a transaction open for a very long time.
+    consolidation_batch_size: int = 2000
+
     role: str = "api"
     log_level: str = "info"
     worker_queues: str = "embedding,ingestion,extraction"

@@ -247,6 +247,23 @@ def ensure_partitions(conn: Connection) -> dict[str, Any]:
     return {"created": int(created)}
 
 
+def _consolidation_step(name: str, conn: Connection, tenant_id: UUID,
+                        project_id: UUID) -> dict[str, Any]:
+    """Run one consolidation pass, or report why it did not.
+
+    Returning a `skipped` reason rather than silently doing nothing matters here:
+    consolidation is the pass most likely to be switched off and forgotten, and a
+    maintenance report that simply omits it looks identical to one where it ran
+    and found nothing to do.
+    """
+    if not settings().consolidation_enabled:
+        return {"skipped": "consolidation_enabled is false"}
+    from . import consolidation as _consolidation
+
+    return getattr(_consolidation, name)(conn, tenant_id=tenant_id,
+                                         project_id=project_id)
+
+
 def run_all(conn: Connection, *, tenant_id: UUID, project_id: UUID) -> dict[str, Any]:
     """One maintenance pass. Each step is independent: a failure in one must not
     stop the others, because the sweep runs unattended and a decay bug should not
@@ -264,6 +281,12 @@ def run_all(conn: Connection, *, tenant_id: UUID, project_id: UUID) -> dict[str,
                                                    project_id=project_id)),
         ("index_advice", lambda: index_advice(conn, tenant_id=tenant_id)),
         ("partitions", lambda: ensure_partitions(conn)),
+        # Consolidation runs AFTER decay, not before. Decay archives episodes
+        # nobody retrieved, so running it first means consolidation never spends
+        # a similarity probe on rows that were about to leave retrieval anyway.
+        ("dedup", lambda: _consolidation_step("dedup", conn, tenant_id, project_id)),
+        ("compaction", lambda: _consolidation_step("compact_episodes", conn,
+                                                   tenant_id, project_id)),
     ):
         try:
             out[name] = fn()
