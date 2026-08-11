@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     # of recommending deletion from a handful of queries.
     arm_contribution_min_events: int = 200
 
+    # ADR-0012: cross-project generalisation is built last and SHIPS DISABLED.
+    # False here closes the proposal path outright rather than queueing
+    # promotions that would go through the moment somebody flips the flag.
+    org_entities_enabled: bool = False
+
     role: str = "api"
     log_level: str = "info"
     worker_queues: str = "embedding,ingestion,extraction"
