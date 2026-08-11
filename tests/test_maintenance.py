@@ -213,9 +213,16 @@ def main() -> None:
     print("\n5. run_all keeps going when a step fails")
     with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
         out = maintenance.run_all(c, tenant_id=TENANT, project_id=PROJECT)
+    # `partitions` joined the sweep with monthly partitioning of
+    # retrieval_events: a write into a range with no partition is an ERROR on
+    # the busiest endpoint, so the window has to be kept rolling by something
+    # that runs unattended.
     check("every maintenance step reported",
-          set(out) == {"conflicts", "utility", "decay", "embeddings", "index_advice"},
+          set(out) == {"conflicts", "utility", "decay", "embeddings",
+                       "index_advice", "partitions"},
           str(sorted(out)))
+    check("the partition window is maintained", "created" in out.get("partitions", {}),
+          str(out.get("partitions")))
     check("no step errored", not any("error" in v for v in out.values()), str(out)[:80])
 
     # ---- 6. embedding backfill (the outage path) ---------------------------

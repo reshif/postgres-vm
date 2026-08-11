@@ -77,3 +77,77 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "Prometheus target {{ $labels.job }} is down"
+
+  # ---------------------------------------------------------------------------
+  # SLO burn rate.
+  #
+  # The rules above are thresholds with a `for:` clause, which answers "is it
+  # bad right now". The §7.3 gates ask something different — "p95 < 350 ms for
+  # 7 days", "Suite 2 at 100% for 30 consecutive days" — and a threshold alert
+  # cannot express that. It fires on every transient blip and stays silent while
+  # a slow, steady drip spends the entire window.
+  #
+  # `memory:gate_*_ok` are recording rules producing 1 when the gate is met, so
+  # averaging one over a window gives the FRACTION of that window spent inside
+  # the gate. That is exactly the quantity the acceptance criteria are written
+  # about, and it is why the recording rules exist.
+  #
+  # Two windows per gate, both required to fire, which is the standard
+  # multi-window burn-rate shape: the long window says the budget is genuinely
+  # being consumed, the short one says it is still happening now. Either alone
+  # produces the two classic failures — alerting on an incident that ended
+  # yesterday, or paging for a thirty-second spike.
+  - name: memory-platform-slo
+    interval: 1m
+    rules:
+      - alert: ContextLatencyBudgetBurningFast
+        expr: |
+          avg_over_time(memory:gate_context_latency_ok[1h]) < 0.90
+            and
+          avg_over_time(memory:gate_context_latency_ok[5m]) < 0.90
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Context latency outside the 350 ms gate for >10% of the last hour"
+          description: "At this rate the 7-day gate in 04-EVALUATION.md §7.3 cannot be met."
+
+      - alert: ContextLatencyBudgetBurningSlow
+        expr: |
+          avg_over_time(memory:gate_context_latency_ok[24h]) < 0.98
+            and
+          avg_over_time(memory:gate_context_latency_ok[2h]) < 0.98
+        for: 30m
+        labels: { severity: info }
+        annotations:
+          summary: "Context latency has been out of gate for >2% of the last day"
+          description: "Slow burn. Not an incident; it is how a 7-day gate is missed without anyone noticing."
+
+      - alert: WriteLatencyBudgetBurning
+        expr: |
+          avg_over_time(memory:gate_write_latency_ok[1h]) < 0.95
+            and
+          avg_over_time(memory:gate_write_latency_ok[5m]) < 0.95
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "write -> retrievable p99 outside the 5 s gate"
+
+      # §7.3 wants median inbox depth under 40 for 14 days. Depth is a gauge, so
+      # this is a straight fraction-of-window rather than a rate.
+      - alert: ReviewBacklogGateAtRisk
+        expr: avg_over_time(memory:gate_inbox_depth_ok[24h]) < 0.80
+        for: 2h
+        labels: { severity: info }
+        annotations:
+          summary: "Review backlog above 40 for most of the last day"
+          description: "The §7.3 production gate is a 14-day median; this is the early signal."
+
+      # Capability C4 wants >= 95% correct trust attribution, and tier 0 in a
+      # pack is not a degradation — it is the thing Suite 2 forbids outright.
+      - alert: UntrustedContentReturned
+        expr: memory:pack_untrusted_ratio > 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "A tier-0 (untrusted) memory was returned in a context pack"
+          description: "Suite 2 forbids this unconditionally. Treat as a containment issue, not a ranking bug."

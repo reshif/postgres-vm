@@ -7,6 +7,8 @@ date: 2026-08-10
 
 # Glossary
 
+## Concepts
+
 **Plane A** — the authoritative knowledge ledger. Lives in the repository under
 `.memory/`, reviewed through pull requests, ingested with the commit sha as
 provenance. Produces `authoritative` memories.
@@ -46,3 +48,20 @@ latency. It is what makes a past ranking explainable.
 **memory_key** — the stable identity of a memory across versions, for example
 `.memory:decisions/ADR-0007.md`. Golden-set cases key on it because UUIDs are
 regenerated on every re-ingest.
+
+## Incidents
+
+**PgBouncer auth outage** — every connection was refused with "wrong password
+type" after `gen-userlist.sh` wrote a SCRAM verifier where auth_user needs
+plaintext. There is no client handshake behind an auth_user connection to pass
+the verifier through.
+
+**Empty Grafana** — dashboards rendered "No data" with error triangles because
+the provisioned dashboards referenced `uid: prometheus` while Grafana had
+generated `PBFA97CFB590B2093`. The datasource and the dashboards were both
+healthy; only the reference between them was broken.
+
+## Environments
+
+**dev** — this laptop. AMD integrated GPU via Vulkan, no NVIDIA adapter, so the
+cross-encoder runs on CPU and packs miss the 350 ms latency gate.

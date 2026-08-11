@@ -190,6 +190,54 @@ def verify_token(token: str) -> dict[str, Any]:
         raise AuthError(f"token rejected: {exc}") from exc
 
 
+def audit_denied(conn: Connection, *, reason: str, claims: dict[str, Any] | None = None,
+                 tenant_id: Any = None) -> None:
+    """Record a refused scope resolution.
+
+    Suite 2's first case is "Project A memory, query from project B — not
+    returned, AND `scope.denied` audited". The first half is RLS's job and it
+    does it silently, which is the point: a policy that errors tells an attacker
+    which projects exist. The consequence is that refusal leaves NO trace
+    anywhere unless something writes one deliberately, and "we were probed for a
+    week" would be unanswerable.
+
+    Deliberately never raises. This runs on a path that is already failing the
+    request, and an audit-write error must not turn a clean 403 into a 500 —
+    that would make the audit trail a denial-of-service surface.
+
+    Writes are best-effort about identity too: a rejected token may name a tenant
+    that does not exist, so tenant_id is nullable here and the claim values are
+    kept in `detail` for correlation.
+    """
+    from . import metrics as _metrics
+
+    _metrics.denied(reason)
+    try:
+        # SAVEPOINT, not just try/except. Scope resolution runs BEFORE any scope
+        # exists, so this INSERT can be refused by RLS — and a refused statement
+        # marks the whole transaction aborted, after which every later statement
+        # fails with "current transaction is aborted". Catching the Python
+        # exception does not un-poison the transaction; only a nested rollback
+        # does. Without this the audit call turned a clean 403 into a cascade of
+        # failures in the caller.
+        with conn.begin_nested():
+            conn.execute(
+                text("INSERT INTO mem.audit_log "
+                 "  (tenant_id, principal_id, action, object_type, object_id, "
+                 "   scope_context, outcome, detail) "
+                 "VALUES (:t, NULL, 'scope.denied', 'scope', NULL, "
+                 "        CAST(:sc AS jsonb), 'deny', CAST(:d AS jsonb))"),
+                {"t": str(tenant_id) if tenant_id else None,
+                 "sc": json.dumps({"claimed": {
+                     k: str(v)[:100] for k, v in (claims or {}).items()
+                     if k in ("sub", "iss", "aud", settings().oauth_org_claim,
+                              settings().oauth_project_claim)}}),
+                 "d": json.dumps({"reason": reason[:300]})},
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("scope denial could not be audited: %s", exc)
+
+
 def resolve_scope(conn: Connection, claims: dict[str, Any]) -> Scope:
     """Map verified claims to a server-side scope.
 
@@ -202,6 +250,7 @@ def resolve_scope(conn: Connection, claims: dict[str, Any]) -> Scope:
     subject = str(claims.get("sub") or "").strip()
 
     if not org_slug or not project_slug:
+        audit_denied(conn, reason="token carries no project binding", claims=claims)
         raise Forbidden(
             f"token carries no project binding (expected `{s.oauth_org_claim}` and "
             f"`{s.oauth_project_claim}` claims)")
@@ -215,6 +264,7 @@ def resolve_scope(conn: Connection, claims: dict[str, Any]) -> Scope:
     if row is None:
         # Deliberately identical to the "not granted" case: distinguishing them
         # turns 403 into a directory of every project on the server.
+        audit_denied(conn, reason="token names an unknown org/project", claims=claims)
         raise Forbidden("token does not grant access to a known project")
 
     # Principals are provisioned on first sight, scoped to the tenant the token

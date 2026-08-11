@@ -227,6 +227,26 @@ def index_advice(conn: Connection, *, tenant_id: UUID, tenant_slug: str = "") ->
             "note": "run as memory_owner; CONCURRENTLY avoids blocking writes"}
 
 
+def ensure_partitions(conn: Connection) -> dict[str, Any]:
+    """Keep `retrieval_events` partitions ahead of the write path.
+
+    A write into a range with no partition is an ERROR, not a slow path, and
+    that error would land on `/v1/context` — the busiest endpoint — at midnight
+    on the first of a month. The migration creates a window three months ahead;
+    this keeps it rolling, so the failure mode requires the scheduler to be down
+    for a quarter before it can bite.
+
+    Tenant-independent, unlike every other maintenance step: partitions are
+    physical structure, not per-project data. It runs inside whichever scope the
+    sweep happens to hold, which is harmless — creating a partition reads no
+    rows.
+    """
+    created = conn.execute(text("SELECT mem.ensure_retrieval_partitions()")).scalar_one()
+    if created:
+        log.info("created %d retrieval_events partition(s)", created)
+    return {"created": int(created)}
+
+
 def run_all(conn: Connection, *, tenant_id: UUID, project_id: UUID) -> dict[str, Any]:
     """One maintenance pass. Each step is independent: a failure in one must not
     stop the others, because the sweep runs unattended and a decay bug should not
@@ -243,6 +263,7 @@ def run_all(conn: Connection, *, tenant_id: UUID, project_id: UUID) -> dict[str,
         ("embeddings", lambda: backfill_embeddings(conn, tenant_id=tenant_id,
                                                    project_id=project_id)),
         ("index_advice", lambda: index_advice(conn, tenant_id=tenant_id)),
+        ("partitions", lambda: ensure_partitions(conn)),
     ):
         try:
             out[name] = fn()

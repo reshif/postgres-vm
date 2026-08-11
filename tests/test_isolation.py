@@ -170,6 +170,83 @@ def main() -> None:
         ), {"v": q, "q": "postgres vector database"}).all()
         check("search_hybrid returns 0 rows for tenant B", len(rows) == 0, f"{len(rows)} rows")
 
+    # ---- 6. sensitivity (Suite 2) -----------------------------------------
+    #
+    # Two of Suite 2's nine cases had nothing to test: `mem.memories.sensitivity`
+    # and `mem.scope_grants` existed in the schema and no code read either, so a
+    # `restricted` memory was readable by anyone already inside the project. The
+    # column was decoration.
+    #
+    # Enforcement now lives in the RLS policy, not in Python, for the same reason
+    # fn_set_scope exists — a check the application performs is one forgotten
+    # join from being skipped, and RLS failures are silent. So these assertions
+    # query the TABLE DIRECTLY as memory_app: if raw SQL obeys the rule, every
+    # code path above it does too.
+    #
+    # The grant-visibility ladder (ceiling, expiry) is asserted at the DATABASE
+    # layer in ops/pgtap/, because issuing a grant requires privileges the
+    # application role deliberately does not have — see the escalation check
+    # below. Suite 2 is specified to be implemented twice; that is the seam.
+    print("\n6. Sensitivity is enforced by the policy (Suite 2)")
+
+    with db.scoped(TENANT_A, PRIN_A, PROJ_A) as c:
+        # Written restricted from the start. Raising an existing row's
+        # sensitivity is refused for the writer, because the updated row would be
+        # invisible to them — correct, and the reason classification is an
+        # owner-side operation.
+        c.execute(text(
+            "INSERT INTO mem.memories "
+            "  (tenant_id, memory_key, type, title, content, digest, scope_kind, "
+            "   project_id, tier, source_type, content_hash, sensitivity) "
+            "VALUES (:t, :k, 'decision', :ti, :co, :d, 'project', :p, "
+            "        'authoritative', 'git', :h, 'restricted')"),
+            {"t": str(TENANT_A), "k": f"iso-secret-{RUN}",
+             "ti": f"Key rotation policy {RUN}",
+             "co": f"The vault master key rotates quarterly. {RUN}",
+             "d": "Key rotation policy.", "p": str(PROJ_A),
+             "h": f"isosecret-{RUN}"})
+
+    with db.scoped(TENANT_A, PRIN_A, PROJ_A) as c:
+        seen = c.execute(text(
+            "SELECT count(*) FROM mem.memories WHERE memory_key = :k"),
+            {"k": f"iso-secret-{RUN}"}).scalar_one()
+    check("a restricted memory is NOT returned without a grant", seen == 0,
+          f"visible={seen}")
+
+    with db.scoped(TENANT_A, PRIN_A, PROJ_A) as c:
+        ordinary = c.execute(text(
+            "SELECT count(*) FROM mem.memories WHERE memory_key = :k"),
+            {"k": f"iso-test-{RUN}"}).scalar_one()
+    check("an ordinary memory in the same scope is unaffected", ordinary == 1,
+          f"visible={ordinary}")
+
+    # The derived copy matters as much as the original: the version trigger
+    # copies whole rows, so gating `memories` alone would be a locked door beside
+    # an open window — the shape of hole migration 0005 closed for cross-tenant.
+    with db.scoped(TENANT_A, PRIN_A, PROJ_A) as c:
+        leaked = c.execute(text(
+            "SELECT count(*) FROM mem.memory_versions v "
+            "  WHERE v.memory_id NOT IN (SELECT id FROM mem.memories)")).scalar_one()
+    check("no version row survives whose memory is not readable", leaked == 0,
+          f"{leaked} orphan versions visible")
+
+    # PRIVILEGE ESCALATION. The application role must not be able to widen its
+    # own access. If memory_app could insert a grant, the sensitivity gate would
+    # be a suggestion — anything that can read the API could read everything.
+    try:
+        with db.scoped(TENANT_A, PRIN_A, PROJ_A) as c:
+            c.execute(text(
+                "INSERT INTO mem.scope_grants "
+                "  (tenant_id, from_kind, from_id, to_kind, to_id, permission, "
+                "   reason, granted_by, max_sensitivity) "
+                "VALUES (:t,'project',:p,'user',:u,'read','self-grant',:u,'restricted')"),
+                {"t": str(TENANT_A), "p": str(PROJ_A), "u": str(PRIN_A)})
+        check("the app role CANNOT grant itself access", False, "IT SUCCEEDED")
+    except Exception as exc:  # noqa: BLE001
+        check("the app role CANNOT grant itself access",
+              "row-level security" in str(exc) or "permission denied" in str(exc),
+              type(exc).__name__)
+
     failed = [n for ok, n in results if not ok]
     print(f"\n{'='*60}\n{len(results)-len(failed)}/{len(results)} passed")
     if failed:

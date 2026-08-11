@@ -126,7 +126,11 @@ services:
     # pgvector >= 0.8.2 on PG18: iterative scans, parallel HNSW builds, halfvec,
     # and PG18 temporal constraints (WITHOUT OVERLAPS). Do not float this tag.
     # If you must run < PG18, see the ADR-0006 portability branch in 01-SCHEMA.sql.
-    image: pgvector/pgvector:0.8.2-pg18
+    # Built from ops/postgres/Dockerfile: the pinned pgvector image plus pgTAP,
+    # which Suite 2 needs to run its database-layer half. `image:` names the
+    # build result so the tag stays readable in `docker compose ps`.
+    build: { context: ./ops/postgres, dockerfile: Dockerfile }
+    image: memory-platform/postgres:0.8.2-pg18-pgtap
     restart: unless-stopped
     # `-c` and its value must be SEPARATE argv entries. Writing `-c=work_mem=64MB`
     # makes postgres parse the parameter name as the empty string and die with
@@ -169,6 +173,9 @@ services:
       # /var/lib/postgresql/data (unused mount/volume)" and restart-loop.
       # See docker-library/postgres#1259.
       - pgdata:/var/lib/postgresql
+      # Suite 2's database half. Read-only: a test suite must not be able to
+      # alter itself from inside the container it is testing.
+      - "./ops/pgtap:/pgtap:ro"
       - ./ops/initdb:/docker-entrypoint-initdb.d:ro   # roles (NOBYPASSRLS) + pgbouncer auth fn
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U memory_owner -d memory"]
@@ -459,12 +466,102 @@ services:
     image: grafana/tempo:2.9.0
     restart: unless-stopped
     command: ["-config.file=/etc/tempo/tempo.yaml"]
-    volumes: ["./ops/tempo.yaml:/etc/tempo/tempo.yaml:ro"]
+    volumes:
+      - "./ops/tempo.yaml:/etc/tempo/tempo.yaml:ro"
+      # tempo.yaml declares 48h retention and writes to /var/tempo. Without a
+      # volume that path is container-local, so "48h retention" actually meant
+      # "until the next restart" — and restarts are how you deploy.
+      - "tempodata:/var/tempo"
+    ports: ["3200:3200"]
+
+  # ------------------------------------------------------------- exporters
+  # Postgres is the single point of failure here: the queue, the vectors, the
+  # RLS model and the audit log all live in it. Charting API latency while the
+  # database is unmonitored is watching the symptom.
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.17.1
+    restart: unless-stopped
+    environment:
+      # memory_ro: logs in, reads statistics, holds no DDL or write grants. An
+      # exporter is a long-lived credential in a container whose only job is to
+      # be scraped, so it gets the least privilege that still answers.
+      DATA_SOURCE_NAME: "postgresql://memory_ro:${DB_RO_PASSWORD:?set in .env}@postgres:5432/memory?sslmode=disable"
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # Pool saturation presents as unexplained API latency over an idle database —
+  # a shape impossible to diagnose from either side alone.
+  pgbouncer-exporter:
+    image: prometheuscommunity/pgbouncer-exporter:v0.10.2
+    restart: unless-stopped
+    command:
+      - --pgBouncer.connectionString=postgres://pgbouncer_auth:${DB_PGBOUNCER_PASSWORD:?set in .env}@pgbouncer:6432/pgbouncer?sslmode=disable
+    depends_on:
+      pgbouncer: { condition: service_started }
+
+  # ------------------------------------------------------------------- logs
+  loki:
+    image: grafana/loki:3.3.2
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    volumes:
+      - "./ops/loki.yaml:/etc/loki/loki.yaml:ro"
+      - "lokidata:/loki"
+
+  # Ships every container's stdout into Loki. The application speaks OTLP with
+  # trace ids attached, but Postgres, PgBouncer and nginx never will — and their
+  # logs are exactly the ones wanted at 3am.
+  promtail:
+    image: grafana/promtail:3.3.2
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/promtail.yaml"]
+    volumes:
+      - "./ops/promtail.yaml:/etc/promtail/promtail.yaml:ro"
+      # A container that can read the docker socket can enumerate the host's
+      # containers. That is the standard cost of centralised container logs; if
+      # the trade is unacceptable, use the `loki` logging driver per service.
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "promtaildata:/tmp"
+    depends_on:
+      loki: { condition: service_started }
+
+  # --------------------------------------------------------------- alerting
+  # Prometheus EVALUATES rules; it does not notify. Without this service the
+  # rules transition to firing and stop there — no grouping, no dedup, no
+  # silences, nobody told.
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    restart: unless-stopped
+    volumes:
+      - "./ops/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro"
+      - "alertmanagerdata:/alertmanager"
+    ports: ["9093:9093"]
 
   prometheus:
     image: prom/prometheus:v3.6.0
     restart: unless-stopped
-    volumes: ["./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+    # Retention has to be stated. The default 15 days quietly makes the §7.3
+    # gates unverifiable the moment one asks for a 30-day window.
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=90d
+      - --web.enable-lifecycle
+      # Required by ops/backup/backup.sh to snapshot the TSDB consistently.
+      # Copying the directory under a running Prometheus can capture a
+      # half-written block.
+      - --web.enable-admin-api
+    volumes:
+      - "./ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+      - "./ops/alerts.yml:/etc/prometheus/alerts.yml:ro"
+      - "./ops/recording-rules.yml:/etc/prometheus/recording-rules.yml:ro"
+      # Every metric ever collected lived in the container filesystem, so a
+      # restart discarded the whole history and no gate written as "sustained
+      # for N days" could ever have been evaluated.
+      - "promdata:/prometheus"
+    ports: ["9090:9090"]
+    depends_on:
+      alertmanager: { condition: service_started }
 
   grafana:
     image: grafana/grafana:12.2.0
@@ -475,12 +572,84 @@ services:
       # text. The prod overlay must set these to "false" and wire real auth.
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
-    volumes: ["./ops/grafana:/etc/grafana/provisioning:ro"]
+      # WITHOUT THIS, EVERY DASHBOARD URL RENDERS A BLANK ERROR PAGE.
+      # With root_url unset Grafana emits relative asset paths, so on
+      # `/d/<uid>/x` the browser requests `/d/public/build/runtime.js`, gets a
+      # 404, and shows "Grafana has failed to load its application files" while
+      # every provisioning API still reports success. The value must be the
+      # address a BROWSER uses, not the port the container binds.
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3001/}
+      GF_SERVER_SERVE_FROM_SUB_PATH: "false"
+    volumes:
+      - "./ops/grafana:/etc/grafana/provisioning:ro"
+      # Dashboards come from provisioning, but alert silences, annotations and
+      # the alerting state machine live in Grafana's own database. Losing them
+      # means a silence set during an incident evaporates on the next deploy.
+      - "grafanadata:/var/lib/grafana"
     ports: ["3001:3000"]
+    depends_on:
+      prometheus: { condition: service_started }
+      loki: { condition: service_started }
+
+  # ---------------------------------------------------------------- backups
+  # Volumes survive a restart. They do not survive a deleted volume or a dead
+  # disk — the last gap where failure is unrecoverable rather than disruptive.
+  #
+  #   docker compose run --rm backup                 one-off
+  #   docker compose --profile backup up -d          scheduled loop
+  backup:
+    profiles: ["backup"]
+    image: memory-platform/postgres:0.8.2-pg18-pgtap
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    # A loop rather than cron: a cron daemon in a container is a second
+    # scheduler to supervise, and its failures are invisible.
+    command:
+      - |
+        set -eu
+        while true; do
+          /backup.sh || echo "backup FAILED (next attempt in ${BACKUP_INTERVAL_S:-86400}s)"
+          sleep ${BACKUP_INTERVAL_S:-86400}
+        done
+    environment:
+      DB_HOST: postgres
+      DB_NAME: memory
+      DB_OWNER_USER: memory_owner
+      DB_OWNER_PASSWORD: ${DB_OWNER_PASSWORD:?set in .env}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_INTERVAL_S: ${BACKUP_INTERVAL_S:-86400}
+    volumes:
+      - "./ops/backup/backup.sh:/backup.sh:ro"
+      - "./ops/backup/restore.sh:/restore.sh:ro"
+      - "backups:/backups"
+      # Loki is read-only: this job only tars its chunks.
+      - "lokidata:/loki:ro"
+      # Prometheus is NOT, and that is a deliberate exception to an otherwise
+      # good rule. Its snapshot API writes into /prometheus/snapshots and the
+      # API contract expects the CALLER to delete the snapshot afterwards —
+      # there is no "release snapshot" endpoint. Mounted read-only, the archive
+      # succeeded and the cleanup failed, so every run left a snapshot behind
+      # and the volume grew until it filled.
+      #
+      # The alternative — never snapshot, just copy the directory — risks
+      # capturing a half-written block, which is a corrupt backup that looks
+      # fine until the day it is needed.
+      - "promdata:/prometheus"
+    depends_on:
+      postgres: { condition: service_healthy }
 
 volumes:
   pgdata:
   hfcache:
+  # Observability and backup state. Every one of these was container-local, so
+  # the entire monitoring history was discarded on each `docker compose up`.
+  promdata:
+  grafanadata:
+  tempodata:
+  lokidata:
+  promtaildata:
+  alertmanagerdata:
+  backups:
 
 # -----------------------------------------------------------------------------
 # Notes
