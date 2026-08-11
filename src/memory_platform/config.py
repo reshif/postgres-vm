@@ -34,6 +34,22 @@ class Settings(BaseSettings):
     ingest_repo_path: str = "/repo"
     ingest_interval_s: int = 60
 
+    # GitHub-native evidence is the replacement authority for the legacy
+    # checkout/.memory ingestion path. It is deliberately disabled by default:
+    # an endpoint which accepts signed external events is only useful once the
+    # GitHub App and its webhook secret have been provisioned for the project.
+    # Enabling it never makes webhook text retrievable; handlers store a small,
+    # signed delivery envelope and queue deterministic processing.
+    github_enabled: bool = False
+    github_webhook_secret: str = ""
+    github_app_id: str = ""
+    github_private_key: str = ""
+    github_api_url: str = "https://api.github.com"
+    github_evidence_suffix: str = "-evidence"
+    github_webhook_max_bytes: int = 1_048_576
+    github_max_blob_bytes: int = 262_144
+    github_max_sync_files: int = 250
+
     # Scope for unattended work (poll ingestion). Same dev-binding caveat as the
     # MCP gateway: ADR-0004 wants this from a token, and a background loop has no
     # request to carry one, so a service identity is the eventual answer.
@@ -135,7 +151,7 @@ class Settings(BaseSettings):
 
     role: str = "api"
     log_level: str = "info"
-    worker_queues: str = "embedding,ingestion,extraction"
+    worker_queues: str = "embedding,ingestion,extraction,github"
 
 
 @lru_cache

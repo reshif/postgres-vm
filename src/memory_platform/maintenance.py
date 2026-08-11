@@ -97,23 +97,44 @@ def recompute_utility(conn: Connection, *, tenant_id: UUID,
            WHERE tenant_id = :t AND memory_id IS NOT NULL
            GROUP BY memory_id
         )
+        ranked AS (
+          -- Usage scored RELATIVE TO THIS PROJECT, not against a constant.
+          --
+          -- This was `least(1.0, sessions / 20.0)`, which saturates: every memory
+          -- past 20 retrievals scored identically, so the signal lost all
+          -- discrimination exactly when there was finally enough data for it to
+          -- mean something. Measured on the eval corpus — 33 of 54 memories sat
+          -- at exactly 0.8 with retrieval counts ranging from 21 to 1810, and an
+          -- A/B against the golden set found utility contributed 0.0000 to
+          -- recall@5, MRR and nDCG@10. A feature carrying weight and changing no
+          -- ordering is not a weak signal, it is an inert one.
+          --
+          -- percent_rank over the memories that clear the cold-start gate keeps
+          -- the term spread across 0..1 at any traffic level, which is what makes
+          -- it capable of reordering anything.
+          SELECT id, sessions,
+                 percent_rank() OVER (ORDER BY sessions) AS usage_rank
+            FROM usage
+           WHERE sessions >= :min_sessions
+        )
         UPDATE mem.memories m
            SET retrieval_count = u.sessions,
                utility = CASE
                  WHEN u.sessions < :min_sessions THEN 0.0
                  ELSE least(1.0,
-                        0.6 * least(1.0, u.sessions::float / 20.0)
+                        0.6 * coalesce(r.usage_rank, 0.0)
                       + 0.4 * greatest(0.0, least(1.0,
                               (coalesce(f.score, 0)::float + 5) / 10.0)))
                END
           FROM usage u
+          LEFT JOIN ranked r ON r.id = u.id
           LEFT JOIN fb f ON f.memory_id = u.id
          WHERE m.id = u.id
            AND (m.retrieval_count IS DISTINCT FROM u.sessions
                 OR m.utility IS DISTINCT FROM CASE
                      WHEN u.sessions < :min_sessions THEN 0.0
                      ELSE least(1.0,
-                            0.6 * least(1.0, u.sessions::float / 20.0)
+                            0.6 * coalesce(r.usage_rank, 0.0)
                           + 0.4 * greatest(0.0, least(1.0,
                                   (coalesce(f.score, 0)::float + 5) / 10.0)))
                    END)

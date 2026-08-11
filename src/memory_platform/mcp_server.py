@@ -289,6 +289,27 @@ async def mcp(request: Request) -> Response:
 async def _handle(request: Request, body: dict, rid: Any, method: Any,
                   params: dict, meta: dict) -> Response:
 
+    # 02-MCP-CONTRACT.md §220: honour `Mcp-Method` and `Mcp-Name` on Streamable
+    # HTTP POST. They let a proxy, gateway or load balancer route and rate-limit
+    # on the operation without parsing the JSON-RPC body — which is the whole
+    # point, since the body may be a stream. Where they disagree with the body
+    # the BODY wins and the mismatch is refused rather than silently resolved:
+    # a header that can override the method is a way to route past whatever the
+    # proxy thought it was allowing.
+    header_method = request.headers.get("mcp-method")
+    if header_method and method and header_method != method:
+        return _error(rid, -32600,
+                      f"Mcp-Method header ({header_method}) disagrees with the "
+                      f"request body ({method})")
+    if method == "tools/call":
+        header_name = request.headers.get("mcp-name")
+        body_name = params.get("name")
+        if header_name and body_name and header_name.replace(".", "_") != \
+                str(body_name).replace(".", "_"):
+            return _error(rid, -32600,
+                          f"Mcp-Name header ({header_name}) disagrees with the "
+                          f"tool named in the body ({body_name})")
+
     # JSON-RPC notifications carry no id and MUST NOT be answered with a result.
     # `notifications/initialized` is the client's third handshake frame; replying
     # to it with a body makes strict clients treat the response as an unsolicited

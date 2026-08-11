@@ -183,20 +183,25 @@ than assumed. Critical alerts route immediately; curation alerts (ADR-0015) are
 on a daily cadence because that failure mode plays out over weeks and paging for
 it at night trains people to ignore the channel.
 
-**Dashboards.** *Memory — Retrieval & Context Packs* covers the serving path:
-p95 pack latency against the 350 ms production gate, latency by stage, per-arm
-retrieval contribution, trust tier of returned items, and why candidates were
-dropped. *Memory — Curation & Trust* covers ADR-0015: review backlog against the
-100/200 thresholds, the extraction kill switch, acceptance rate against the
-30–85% band, and writes by assigned tier.
+**Dashboards.** Grafana provisions three intentionally focused dashboards in
+the **Knowledge Operations** folder. *Knowledge Platform | Command Center* is
+the incident entry point: active alerts, user-facing endpoint readiness, loop
+liveness, current traffic, notification delivery, and direct investigation
+links. It does not repeat retrieval tuning metrics or per-project curation
+details.
 
-*Memory - Operations & Alerts* is the incident entry point: firing alerts,
-every critical service contract, worker and scheduler loop liveness, database
-backend health, scrape target state, and Alertmanager delivery are all on one
-page. It links directly to Alertmanager, Prometheus targets, and the Knowledge
-Console. All three dashboards are provisioned from
-`ops/grafana/dashboards/`. Edit the JSON and Grafana picks it up within 30
-seconds — no restart, no re-import.
+*Knowledge Platform | Retrieval Reliability* covers serving under actual
+traffic: latency objectives, stage timing, retrieval-arm contribution, evidence
+trust composition, pack exclusions, vector fallback, and API outcomes. An empty
+latency value means no traffic in the measurement window, never a passing SLO.
+*Knowledge Platform | Knowledge Governance* starts with a project selector and
+covers ADR-0015 review pressure, stalled work, conflicts, extraction state,
+acceptance, and memory lifecycle. Its platform-level write and injection panels
+are explicitly marked **service-wide** because those metrics are not
+project-labelled.
+
+All three dashboards are provisioned from `ops/grafana/dashboards/`. Edit the
+JSON and Grafana picks it up within 30 seconds — no restart or re-import.
 
 **Where the metrics come from, and why it is split.** Request-time metrics come
 from the API, recorded from work already done for a caller who proved their

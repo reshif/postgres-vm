@@ -474,6 +474,21 @@ def _render(item: dict) -> dict:
         "score_parts": item.get("score_parts"),
         "also_seen_in": item.get("also_seen_in", []),
         "unverified": item.get("status") == "quarantined",
+        # 04-EVALUATION.md Suite 3: a superseded decision must be "returned as
+        # context, clearly marked superseded, never as current guidance".
+        #
+        # An as-of pack is the only place these reach an agent — current
+        # retrieval filters them out entirely — and until now they arrived
+        # carrying `trust: authoritative` and nothing to say the project had
+        # since changed its mind. An agent reading a historical pack could not
+        # distinguish "this is what we believe" from "this is what we believed in
+        # June", which is precisely the confusion the bi-temporal model exists to
+        # prevent.
+        #
+        # A field rather than a filter: what is returned does not change, only
+        # whether the reader can tell what it is.
+        "historical": item.get("status") in ("superseded", "archived"),
+        "status": item.get("status"),
         "context_role": item.get("context_role", "evidence"),
         "evidence": item.get("evidence"),
     }

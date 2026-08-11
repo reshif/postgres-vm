@@ -8,9 +8,11 @@
 apiVersion: 1
 
 providers:
+  # Keep this provider name stable so Grafana treats the rewrite as an update,
+  # while grouping all operator dashboards under their actual responsibility.
   - name: memory-platform
     orgId: 1
-    folder: Memory Platform
+    folder: Knowledge Operations
     type: file
     disableDeletion: false
     # Picks up edits to the JSON without a Grafana restart.

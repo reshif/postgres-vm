@@ -1,603 +1,119 @@
 {
   "uid": "memory-curation",
-  "title": "Memory — Curation & Trust",
-  "description": "ADR-0015 says the thing that fails is not the extractor and not the queue — it is the human. Select a project before making a curation decision; global write and injection metrics are explicitly labelled as service-wide.",
-  "tags": [
-    "memory-platform"
-  ],
+  "title": "Knowledge Platform | Knowledge Governance",
+  "description": "Project-scoped review, curation, and trust controls. Service-wide panels are labelled as such so they cannot be mistaken for a selected project's state.",
+  "tags": ["knowledge-platform", "governance", "curation"],
   "timezone": "browser",
   "schemaVersion": 39,
   "refresh": "1m",
-  "time": {
-    "from": "now-24h",
-    "to": "now"
-  },
+  "time": {"from": "now-24h", "to": "now"},
+  "links": [
+    {"title": "Command Center", "url": "/d/memory-operations", "targetBlank": false},
+    {"title": "Knowledge Console", "url": "http://localhost:3000/knowledge/", "targetBlank": true}
+  ],
   "templating": {
     "list": [
       {
-        "name": "project",
-        "label": "Project",
-        "type": "query",
-        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "name": "project", "label": "Project", "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
         "definition": "label_values(memory_inbox_depth, project)",
-        "query": { "query": "label_values(memory_inbox_depth, project)", "refId": "PrometheusVariableQueryEditor-VariableQuery" },
-        "refresh": 1,
-        "includeAll": true,
-        "allValue": ".*",
-        "multi": true,
-        "hide": 0,
-        "sort": 1,
-        "current": { "text": "All", "value": ["$__all"] },
-        "options": []
+        "query": {"query": "label_values(memory_inbox_depth, project)", "refId": "PrometheusVariableQueryEditor-VariableQuery"},
+        "refresh": 1, "includeAll": true, "allValue": ".*", "multi": true,
+        "hide": 0, "sort": 1, "current": {"text": "All", "value": ["$__all"]}, "options": []
       }
     ]
   },
   "panels": [
+    {"type": "row", "title": "Selected project", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}},
     {
-      "type": "row",
-      "title": "The ADR-0015 kill switch",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      }
+      "type": "stat", "title": "Review backlog (selected)", "description": "Items awaiting a human review. The alert threshold is 100; extraction disables after a sustained backlog of 200.",
+      "gridPos": {"h": 5, "w": 5, "x": 0, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(memory_inbox_depth{project=~\"$project\"})", "legendFormat": "backlog", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 100}, {"color": "red", "value": 200}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
     {
-      "type": "stat",
-      "title": "Review backlog (selected)",
-      "description": "Alert at 100. Extraction auto-disables at 200 sustained for 14 days. The selector prevents unrelated project queues from being mistaken for this project's work.",
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 0,
-        "y": 1
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "type": "stat", "title": "Oldest unreviewed item", "description": "Age of the oldest pending candidate in the selected project. A stable backlog can still be unsafe if no one is reviewing it.",
+      "gridPos": {"h": 5, "w": 4, "x": 5, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "max(memory_inbox_oldest_days{project=~\"$project\"})", "legendFormat": "oldest", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "d", "decimals": 1, "noValue": "no pending item", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 3}, {"color": "red", "value": 7}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Open conflicts", "description": "Conflicts requiring an explicit human decision in the selected project.",
+      "gridPos": {"h": 5, "w": 4, "x": 9, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(memory_conflicts_open{project=~\"$project\"})", "legendFormat": "conflicts", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 1}, {"color": "red", "value": 5}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Extraction status", "description": "Automatic candidate extraction for the selected project. Off can be intentional or the ADR-0015 protection state.",
+      "gridPos": {"h": 5, "w": 4, "x": 13, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "min(memory_extraction_enabled{project=~\"$project\"})", "legendFormat": "enabled", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "bool", "decimals": 0, "mappings": [{"type": "value", "options": {"0": {"text": "Paused", "color": "red"}, "1": {"text": "Enabled", "color": "green"}}}], "noValue": "unknown", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Acceptance rate", "description": "Human acceptance of extracted candidates in the selected project. Review low or unusually high values with the underlying samples.",
+      "gridPos": {"h": 5, "w": 4, "x": 17, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "avg(memory_extraction_acceptance_rate{project=~\"$project\"})", "legendFormat": "acceptance", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "decimals": 1, "noValue": "not enough reviews", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0.3}, {"color": "orange", "value": 0.86}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Active memory records", "description": "Current active records in the selected project.",
+      "gridPos": {"h": 5, "w": 3, "x": 21, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(memory_memories{project=~\"$project\",status=\"active\"})", "legendFormat": "active", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": []},
+      "options": {"colorMode": "none", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {"type": "row", "title": "Curation trajectory", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 6}},
+    {
+      "type": "timeseries", "title": "Review backlog trend", "description": "Pending work by selected project. Use the age metric above to distinguish new volume from stalled review.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 7}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "memory_inbox_depth{project=~\"$project\"}", "legendFormat": "{{project}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "0", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 100}, {"color": "red", "value": 200}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {
+      "type": "timeseries", "title": "Open conflicts and oldest item", "description": "Conflict count and age are different signals, so they use separate axes instead of being summed.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 7}, "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(memory_inbox_depth{project=~\"$project\"})",
-          "legendFormat": "awaiting review",
-          "instant": true,
-          "range": false
-        }
+        {"refId": "A", "expr": "memory_conflicts_open{project=~\"$project\"}", "legendFormat": "conflicts: {{project}}"},
+        {"refId": "B", "expr": "memory_inbox_oldest_days{project=~\"$project\"}", "legendFormat": "oldest days: {{project}}"}
       ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 100
-              },
-              {
-                "color": "red",
-                "value": 200
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "area",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      }
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "0", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never"}, "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": [{"matcher": {"id": "byFrameRefID", "options": "B"}, "properties": [{"id": "unit", "value": "d"}, {"id": "custom.axisPlacement", "value": "right"}]}]},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {"type": "row", "title": "Knowledge estate", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 15}},
+    {
+      "type": "timeseries", "title": "Memory estate by status", "description": "Records in the selected project, grouped by lifecycle status.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (status) (memory_memories{project=~\"$project\"})", "legendFormat": "{{status}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "0", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 15, "stacking": {"mode": "normal"}, "showPoints": "never"}, "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
-      "type": "stat",
-      "title": "LLM extraction (selected)",
-      "description": "0 means the kill switch has fired or extraction was never enabled. With multiple projects selected, this shows the least healthy selected project.",
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 6,
-        "y": 1
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "min(memory_extraction_enabled{project=~\"$project\"})",
-          "legendFormat": "enabled",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "mappings": [
-            {
-              "type": "value",
-              "options": {
-                "0": {
-                  "text": "DISABLED",
-                  "color": "red",
-                  "index": 0
-                },
-                "1": {
-                  "text": "ENABLED",
-                  "color": "green",
-                  "index": 1
-                }
-              }
-            }
-          ],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      }
+      "type": "barchart", "title": "Writes by trust tier (service-wide)", "description": "Not filtered by project because this metric deliberately has no project label. It is a platform safeguard signal.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (tier) (increase(memory_writes_total[24h]))", "legendFormat": "{{tier}}", "format": "time_series", "instant": true}],
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": []},
+      "options": {"orientation": "horizontal", "legend": {"displayMode": "hidden", "placement": "bottom", "showLegend": false}, "xTickLabelRotation": 0}
+    },
+    {"type": "row", "title": "Service-wide safeguards", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 24}},
+    {
+      "type": "timeseries", "title": "Injection signals (service-wide)", "description": "Potential prompt-injection signals across the platform. This is intentionally not project-filtered.",
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 25}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (reason) (rate(memory_injection_flagged_total[5m]))", "legendFormat": "{{reason}}"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "noValue": "0", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
-      "type": "gauge",
-      "title": "Extraction acceptance rate (selected)",
-      "description": "Healthy band is 30-85%. Below: the extractor is generating cleanup work. Above: near-total acceptance usually means review has become a formality. Both ends are failures.",
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 12,
-        "y": 1
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "avg(memory_extraction_acceptance_rate{project=~\"$project\"})",
-          "legendFormat": "acceptance",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "min": 0,
-          "max": 1,
-          "decimals": 2,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 0.3
-              },
-              {
-                "color": "red",
-                "value": 0.85
-              }
-            ]
-          },
-          "noValue": "no traffic in window"
-        },
-        "overrides": []
-      },
-      "options": {
-        "showThresholdLabels": false,
-        "showThresholdMarkers": true,
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Oldest unreviewed item (selected)",
-      "description": "Candidates expire at 14 days. An item older than that was never triaged.",
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 18,
-        "y": 1
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "max(memory_inbox_oldest_days{project=~\"$project\"})",
-          "legendFormat": "days",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "d",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 7
-              },
-              {
-                "color": "red",
-                "value": 14
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      }
-    },
-    {
-      "type": "row",
-      "title": "Backlog over time",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 6
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Inbox depth by project",
-      "description": "The shape matters more than the value: a queue that only ever rises has no curator, whatever its current depth.",
-      "gridPos": {
-        "h": 8,
-        "w": 16,
-        "x": 0,
-        "y": 7
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "memory_inbox_depth{project=~\"$project\"}",
-          "legendFormat": "{{project}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 15,
-            "showPoints": "auto"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 100
-              },
-              {
-                "color": "red",
-                "value": 200
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Unresolved conflicts",
-      "description": "Contested points leak into every pack until resolved.",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 7
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "memory_conflicts_open{project=~\"$project\"}",
-          "legendFormat": "{{project}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 15,
-            "showPoints": "auto"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 1
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "single",
-          "sort": "none"
-        }
-      }
-    },
-    {
-      "type": "row",
-      "title": "What is being written, and at what trust",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 15
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Service-wide writes by assigned tier",
-      "description": "Request-time write metrics intentionally carry no project label, avoiding high-cardinality scoped telemetry. Tier is assigned server-side from source_type and is never accepted from a caller.",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 16
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (tier) (rate(memory_writes_total[10m])) * 60",
-          "legendFormat": "{{tier}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "bars",
-            "lineWidth": 1,
-            "fillOpacity": 60,
-            "stacking": {
-              "mode": "normal"
-            },
-            "showPoints": "never"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "barchart",
-      "title": "Service-wide injection signals",
-      "description": "Suite 5. Security telemetry is service-wide so unusual attempts remain visible without putting project content into metric labels.",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 16
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (signal) (increase(memory_injection_flagged_total[7d]))",
-          "legendFormat": "{{signal}}",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "orientation": "horizontal",
-        "legend": {
-          "displayMode": "hidden",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "xTickLabelRotation": 0
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Memories by status",
-      "gridPos": {
-        "h": 7,
-        "w": 24,
-        "x": 0,
-        "y": 24
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (status) (memory_memories{project=~\"$project\"})",
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "stacking": {
-              "mode": "normal"
-            },
-            "showPoints": "never"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "type": "timeseries", "title": "Extraction acceptance rate", "description": "Acceptance rate per selected project over time. Treat it as a quality signal, not an automatic threshold override.",
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 25}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "memory_extraction_acceptance_rate{project=~\"$project\"}", "legendFormat": "{{project}}"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "noValue": "not enough reviews", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never"}, "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 0.3}, {"color": "orange", "value": 0.86}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
     }
   ]
 }

@@ -124,6 +124,48 @@ class _JWKS:
         return key
 
 
+def discover_jwks_url(issuer: str) -> str:
+    """Resolve the JWKS endpoint from the issuer's OIDC discovery document.
+
+    Every OpenID provider publishes `jwks_uri` at
+    `{issuer}/.well-known/openid-configuration`, and every OIDC client reads it
+    from there. Requiring an operator to copy that URL into a second setting adds
+    a step whose only possible outcomes are "same as discovery" and "wrong" — and
+    a JWKS URL pointing somewhere other than the issuer's own is precisely the
+    misconfiguration that makes signature verification meaningless.
+
+    This was found by pointing the stack at a real Keycloak: every request failed
+    with `MEMORY_OAUTH_JWKS_URL is not configured`. tests/test_auth.py could not
+    have caught it — it injects a verification key directly and never resolves an
+    endpoint at all, which is why a synthetic-key suite is not a substitute for
+    one real provider.
+
+    `oauth_jwks_url` remains supported and still wins when set, for providers with
+    a non-standard discovery path or a network where it is not reachable.
+    """
+    if not issuer:
+        return ""
+    url = f"{issuer.rstrip('/')}/.well-known/openid-configuration"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as r:
+            doc = json.load(r)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+        raise AuthError(f"OIDC discovery failed at {url}: {exc}") from exc
+
+    jwks_uri = str(doc.get("jwks_uri") or "")
+    # The discovered issuer must match the one we were configured with, or the
+    # document is describing a different provider and its keys prove nothing
+    # about our tokens (RFC 8414 requires this check).
+    discovered_issuer = str(doc.get("issuer") or "")
+    if discovered_issuer and discovered_issuer.rstrip("/") != issuer.rstrip("/"):
+        raise AuthError(
+            f"OIDC discovery at {url} declares issuer {discovered_issuer!r}, "
+            f"which is not the configured issuer {issuer!r}")
+    if jwks_uri:
+        log.info("discovered JWKS endpoint %s for issuer %s", jwks_uri, issuer)
+    return jwks_uri
+
+
 _jwks: _JWKS | None = None
 _test_key: Any = None      # set only by tests; see verify_token
 
@@ -161,9 +203,13 @@ def verify_token(token: str) -> dict[str, Any]:
     else:
         global _jwks
         if _jwks is None:
-            if not s.oauth_jwks_url:
-                raise AuthError("MEMORY_OAUTH_JWKS_URL is not configured")
-            _jwks = _JWKS(s.oauth_jwks_url)
+            jwks_url = s.oauth_jwks_url or discover_jwks_url(s.oauth_issuer)
+            if not jwks_url:
+                raise AuthError(
+                    "cannot determine the JWKS endpoint: MEMORY_OAUTH_JWKS_URL is "
+                    f"unset and OIDC discovery against {s.oauth_issuer} did not "
+                    "return a jwks_uri")
+            _jwks = _JWKS(jwks_url)
         key = _jwks.key_for(header.get("kid"))
 
     try:

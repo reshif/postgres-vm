@@ -1,0 +1,143 @@
+{
+  "realm": "memory-platform",
+  "enabled": true,
+  "displayName": "Memory Platform (local IdP)",
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "accessTokenLifespan": 900,
+  "clients": [
+    {
+      "clientId": "memory-console",
+      "name": "Knowledge Console",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://localhost:3000/*",
+        "http://localhost:8080/*"
+      ],
+      "webOrigins": [
+        "*"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "+"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "memory-platform",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        },
+        {
+          "name": "org",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "org",
+            "claim.name": "org",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        },
+        {
+          "name": "project",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "config": {
+            "user.attribute": "project",
+            "claim.name": "project",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "curator",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "curator@example.com",
+      "firstName": "Test",
+      "lastName": "Curator",
+      "attributes": {
+        "org": [
+          "tenant-e5a1e5a1"
+        ],
+        "project": [
+          "project-e5a1e5a1"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "curator-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-memory-platform"
+      ],
+      "requiredActions": []
+    },
+    {
+      "username": "mallory",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "mallory@example.com",
+      "attributes": {
+        "org": [
+          "tenant-e5a1e5a1"
+        ],
+        "project": [
+          "a-project-that-does-not-exist"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "mallory-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-memory-platform"
+      ],
+      "requiredActions": [],
+      "firstName": "Forged",
+      "lastName": "Claim"
+    },
+    {
+      "username": "noclaims",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "noclaims@example.com",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "noclaims-password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-memory-platform"
+      ],
+      "requiredActions": [],
+      "firstName": "No",
+      "lastName": "Binding"
+    }
+  ]
+}

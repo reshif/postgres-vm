@@ -319,6 +319,10 @@ def main() -> None:
           str(sorted(u for u in uids if u))[:60])
     check("the curation dashboard is provisioned", "memory-curation" in uids)
     check("the operations dashboard is provisioned", "memory-operations" in uids)
+    folders = {d.get("folderTitle") for d in dashboards
+               if d.get("uid") in {"memory-retrieval", "memory-curation", "memory-operations"}}
+    check("operator dashboards live in the Knowledge Operations folder",
+          folders == {"Knowledge Operations"}, str(sorted(folders)))
 
     try:
         datasources = get_json(GRAFANA + "/api/datasources")
@@ -390,11 +394,16 @@ def main() -> None:
           curation_project.get("allValue") == ".*" and "$project" in curation_expr,
           curation_expr)
 
-    reranker_exprs = {target.get("expr") for target in
-                      panel("memory-operations", "Reranker contract").get("targets", [])}
-    check("operations dashboard uses the API reranker decision",
-          "memory_rerank_enabled{job=\"memory-api\"}" in reranker_exprs,
-          str(sorted(expression for expression in reranker_exprs if expression)))
+    command = dashboard_models.get("memory-operations", {})
+    check("operations dashboard is the command center",
+          command.get("title") == "Knowledge Platform | Command Center",
+          command.get("title", ""))
+    readiness_exprs = {target.get("expr") for target in
+                       panel("memory-operations", "Core service readiness").get("targets", [])}
+    check("command center leads with endpoint readiness",
+          "sum(probe_success{criticality=\"critical\"}) / count(probe_success{criticality=\"critical\"})"
+          in readiness_exprs,
+          str(sorted(expression for expression in readiness_exprs if expression)))
     warning_exprs = {target.get("expr") for target in
                      panel("memory-operations", "Warning alerts").get("targets", [])}
     check("operations dashboard separates warning severity",
@@ -426,6 +435,9 @@ def main() -> None:
           and "memory:write_observations_per_minute > 0" in recording_rules
           and "memory:context_pack_observations_per_minute > 0" in alert_rules,
           "idle histograms must not spend the latency error budget")
+    check("reranker alert follows the API's active configuration",
+          'memory_rerank_enabled{job="memory-api"}' in alert_rules,
+          "optional reranker must not alert when intentionally disabled")
 
     try:
         am_ok = get_json(ALERTMANAGER + "/api/v2/status")

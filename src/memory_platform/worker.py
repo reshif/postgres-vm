@@ -17,8 +17,9 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from procrastinate import App, PsycopgConnector
 from sqlalchemy import text
 
-from . import db, ingest, maintenance
+from . import db, evidence_assertions, github_evidence, ingest, maintenance
 from .config import settings
+from .github_client import GitHubApiError, GitHubAppClient
 
 logging.basicConfig(level=settings().log_level.upper())
 log = logging.getLogger("memory.worker")
@@ -68,6 +69,29 @@ async def ingest_git_commit(project_id: str, sha: str) -> None:
     log.info("ingest_git_commit %s@%s: %s", project_id, sha[:12], report)
 
 
+@app.task(queue="github", name="process_github_delivery")
+async def process_github_delivery(delivery_id: str, project_id: str) -> None:
+    """Turn one verified provider envelope into immutable provenance.
+
+    This task deliberately does not write a memory. A webhook proves GitHub sent
+    an event, not that its free-form text is accepted project knowledge. The
+    next stage fetches exact Git blobs and the curation stage accepts reviewed
+    assertions from the sidecar evidence repository.
+    """
+    try:
+        report = await asyncio.to_thread(
+            _process_github_delivery, UUID(delivery_id), UUID(project_id))
+    except Exception as exc:  # noqa: BLE001
+        log.exception("GitHub delivery %s failed", delivery_id)
+        try:
+            await asyncio.to_thread(
+                _mark_github_delivery_failed, UUID(delivery_id), UUID(project_id), str(exc))
+        except Exception:  # noqa: BLE001
+            log.exception("could not mark GitHub delivery %s as failed", delivery_id)
+        raise
+    log.info("GitHub delivery %s processed: %s", delivery_id, report)
+
+
 def _ingest_service_scope(project_id: UUID) -> tuple[UUID, UUID, str | None]:
     """Resolve one registered project and an attributable worker principal.
 
@@ -95,6 +119,80 @@ def _ingest_service_scope(project_id: UUID) -> tuple[UUID, UUID, str | None]:
             {"id": str(principal_id), "tenant": str(tenant_id),
              "external": "plane-a-ingestion"}).scalar_one()
     return tenant_id, UUID(str(principal_id)), project["repo_url"]
+
+
+def _github_service_scope(project_id: UUID) -> tuple[UUID, UUID, dict]:
+    """Provision the attributable service identity for GitHub event work."""
+    with db.engine_direct().begin() as conn:
+        project = conn.execute(text(
+            "SELECT tenant_id, repo_url, evidence_repo_url, github_installation_id "
+            "FROM mem.projects WHERE id = :project"),
+            {"project": str(project_id)}).mappings().one_or_none()
+        if project is None:
+            raise LookupError(f"project {project_id} is not registered")
+        tenant_id = UUID(str(project["tenant_id"]))
+        principal_id = uuid5(NAMESPACE_URL, f"memory-platform:github:{tenant_id}")
+        principal_id = conn.execute(text(
+            "INSERT INTO mem.principals "
+            "  (id, tenant_id, actor, external_id, display_name) "
+            "VALUES (:id, :tenant, 'service', :external, 'GitHub evidence worker') "
+            "ON CONFLICT (tenant_id, actor, external_id) DO UPDATE "
+            "  SET display_name = EXCLUDED.display_name "
+            "RETURNING id"),
+            {"id": str(principal_id), "tenant": str(tenant_id),
+             "external": "github-evidence"}).scalar_one()
+    return tenant_id, UUID(str(principal_id)), dict(project)
+
+
+def _process_github_delivery(delivery_id: UUID, project_id: UUID) -> dict:
+    """Synchronous core for a queued GitHub delivery, exercised by acceptance tests."""
+    tenant_id, principal_id, project = _github_service_scope(project_id)
+    with db.scoped(tenant_id, principal_id, project_id, direct=True) as conn:
+        delivery = github_evidence.get_delivery(conn, delivery_id=delivery_id)
+        if delivery is None:
+            raise LookupError(f"GitHub delivery {delivery_id} is not visible in project {project_id}")
+        if UUID(str(delivery["project_id"])) != project_id:
+            raise PermissionError("queued GitHub delivery does not belong to the stated project")
+        if delivery["status"] == "processed":
+            return {"duplicate": True}
+    sidecar_sync = None
+    if delivery["repository_role"] == "evidence" and delivery["event_name"] == "push":
+        if not delivery["revision"]:
+            raise GitHubApiError("evidence repository push has no immutable commit SHA")
+        if (not project["repo_url"] or not project["evidence_repo_url"]
+                or not project["github_installation_id"]):
+            raise GitHubApiError("GitHub-native project binding is incomplete")
+        cfg = settings()
+        with GitHubAppClient(
+            app_id=cfg.github_app_id, private_key=cfg.github_private_key,
+            api_url=cfg.github_api_url) as client:
+            sidecar_sync = evidence_assertions.prepare_sidecar_sync(
+                client, source_repository=str(project["repo_url"]),
+                evidence_repository=str(project["evidence_repo_url"]),
+                revision=str(delivery["revision"]),
+                installation_id=int(project["github_installation_id"]),
+                max_blob_bytes=cfg.github_max_blob_bytes,
+                max_files=cfg.github_max_sync_files)
+    with db.scoped(tenant_id, principal_id, project_id, direct=True) as conn:
+        artifact = github_evidence.record_event_artifact(conn, delivery=delivery)
+        synced = None
+        if sidecar_sync is not None:
+            synced = evidence_assertions.persist_sidecar_sync(
+                conn, tenant_id=tenant_id, project_id=project_id,
+                evidence_repository=str(project["evidence_repo_url"]),
+                evidence_revision=str(delivery["revision"]),
+                observed_at=delivery["occurred_at"], prepared=sidecar_sync,
+                accepted_by=principal_id)
+        github_evidence.update_delivery(conn, delivery_id=delivery_id, status="processed")
+    return {"artifact": artifact, "event": delivery["event_name"],
+            "revision": delivery["revision"], "sidecar": synced}
+
+
+def _mark_github_delivery_failed(delivery_id: UUID, project_id: UUID, error: str) -> None:
+    tenant_id, principal_id, _project = _github_service_scope(project_id)
+    with db.scoped(tenant_id, principal_id, project_id, direct=True) as conn:
+        github_evidence.update_delivery(
+            conn, delivery_id=delivery_id, status="failed", error=error)
 
 
 def _normalise_repo_url(url: str) -> str:

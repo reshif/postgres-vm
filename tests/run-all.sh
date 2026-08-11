@@ -26,7 +26,7 @@ else
   exit 1
 fi
 
-SUITES="test_rls_coverage test_isolation test_write_path test_ingest test_context test_planner test_evidence test_hybrid_lexical test_capture test_binding test_cli test_entities test_injection test_conflicts test_inbox test_extraction test_temporal test_console_data test_evaluations test_maintenance test_consolidation test_distillation test_arms test_org_entities test_limits test_auth test_mcp test_mcp_extensions test_eval_snapshot test_eval_cases test_eval_export test_eval_latency_gate test_observability"
+SUITES="test_rls_coverage test_isolation test_write_path test_ingest test_context test_planner test_evidence test_hybrid_lexical test_capture test_binding test_github_evidence test_github_client test_evidence_assertions test_github_sidecar_sync test_cli test_entities test_injection test_conflicts test_inbox test_extraction test_temporal test_console_data test_evaluations test_maintenance test_consolidation test_distillation test_arms test_org_entities test_limits test_auth test_mcp test_mcp_extensions test_eval_snapshot test_eval_cases test_eval_export test_eval_latency_gate test_observability"
 FAILED=""
 
 # Ordered deliberately: RLS coverage runs FIRST. It is the structural check, and
@@ -43,6 +43,37 @@ for s in $SUITES; do
 done
 
 printf '\n%s\n' "------------------------------------------------------------"
+
+# ---------------------------------------------------------------------------
+# Record the isolation result, pass OR FAIL.
+#
+# 04-EVALUATION.md §7.3 gates production on "Suite 2 (isolation) at 100% for 30
+# consecutive days". Passing today is not that claim, and nothing was retaining
+# the history that would let anyone make it — the go/no-go could only ever report
+# it as unmeasured.
+#
+# Recorded on BOTH paths deliberately. A history that only writes rows when the
+# suites pass would show an unbroken green streak no matter how often isolation
+# broke, which is worse than no history: it would look like evidence.
+ISO_STATUS=passed
+case "$FAILED" in
+  *test_rls_coverage*|*test_isolation*) ISO_STATUS=failed ;;
+esac
+
+DEV_TENANT="${MEMORY_DEV_TENANT_ID:-$(grep -E '^MEMORY_DEV_TENANT_ID=' .env 2>/dev/null | cut -d= -f2 | tr -d '\r')}"
+DEV_PROJECT="${MEMORY_DEV_PROJECT_ID:-$(grep -E '^MEMORY_DEV_PROJECT_ID=' .env 2>/dev/null | cut -d= -f2 | tr -d '\r')}"
+if [ -n "$DEV_TENANT" ] && [ -n "$DEV_PROJECT" ]; then
+  $DOCKER compose exec -T postgres psql -U memory_owner -d memory -q -c \
+    "INSERT INTO mem.evaluation_runs
+       (tenant_id, project_id, suite, status, metrics, completed_at)
+     VALUES ('$DEV_TENANT', '$DEV_PROJECT', 'isolation', '$ISO_STATUS',
+             '{\"suites\": [\"test_rls_coverage\", \"test_isolation\"],
+               \"note\": \"pgTAP half runs separately via tests/run-pgtap.sh\"}'::jsonb,
+             now());" >/dev/null 2>&1 \
+    && printf 'isolation result recorded (%s)\n' "$ISO_STATUS" \
+    || printf 'could not record the isolation result\n'
+fi
+
 if [ -n "$FAILED" ]; then
   printf 'FAILED:%s\n' "$FAILED"
   exit 1

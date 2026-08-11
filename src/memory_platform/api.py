@@ -12,6 +12,7 @@ import time
 
 from datetime import datetime
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import quote
 from uuid import UUID
 
@@ -54,9 +55,16 @@ app.include_router(routes_graph.router)
 from . import routes_tasks  # noqa: E402
 app.include_router(routes_tasks.router)
 
+from . import routes_github  # noqa: E402
+app.include_router(routes_github.router)
+
 
 _UNSCOPED_API_PATHS = {
     "/v1/console/config",  # Bootstrap may exchange an optional bearer for a scope.
+    # GitHub uses its own HMAC authentication. OAuth binding is neither present
+    # nor appropriate for a provider delivery; the route verifies the signature
+    # before parsing its body or resolving a project.
+    "/v1/integrations/github/webhooks",
 }
 _BOOTSTRAP_ONLY_PATHS = {
     # Project registration creates an organisation and therefore cannot be
@@ -617,6 +625,13 @@ class RegisterProject(BaseModel):
     project_slug: str
     name: str | None = None
     repo_url: str | None = None
+    # `legacy` is deliberately the compatibility default. A project becomes
+    # GitHub-native only when its source repository, evidence repository, and
+    # App installation are bound together in one explicit request.
+    source_provider: Literal["legacy", "github"] = "legacy"
+    evidence_repo_url: str | None = None
+    github_installation_id: int | None = Field(default=None, ge=1)
+    git_default_branch: str | None = None
 
 
 @app.post("/v1/projects", status_code=201)
@@ -629,6 +644,18 @@ def register_project(req: RegisterProject) -> dict:
     """
     from uuid import uuid4
 
+    if req.source_provider == "github":
+        from .github_evidence import normalize_repository_url
+
+        source = normalize_repository_url(req.repo_url or "")
+        evidence = normalize_repository_url(req.evidence_repo_url or "")
+        if not source.startswith("github.com/"):
+            raise HTTPException(422, "a GitHub-native project requires a GitHub source repository")
+        if not evidence.startswith("github.com/"):
+            raise HTTPException(422, "a GitHub-native project requires a GitHub evidence repository")
+        if not req.github_installation_id:
+            raise HTTPException(422, "a GitHub-native project requires a GitHub App installation id")
+
     with db.engine().begin() as conn:
         org = conn.execute(text(
             "INSERT INTO mem.organizations (id, slug, name) VALUES (:i, :s, :s) "
@@ -636,7 +663,8 @@ def register_project(req: RegisterProject) -> dict:
             {"i": str(uuid4()), "s": req.org_slug}).scalar_one()
 
         existing = conn.execute(text(
-            "SELECT id, repo_url FROM mem.projects "
+            "SELECT id, repo_url, source_provider, evidence_repo_url, "
+            "       github_installation_id, git_default_branch FROM mem.projects "
             " WHERE tenant_id = :t AND slug = :s"),
             {"t": str(org), "s": req.project_slug}).mappings().one_or_none()
 
@@ -651,13 +679,35 @@ def register_project(req: RegisterProject) -> dict:
                     f"project {req.org_slug}/{req.project_slug} is already bound to "
                     f"{existing['repo_url']}. Refusing to repoint it — pick a different "
                     "project slug, or update the binding deliberately."))
+            if req.source_provider == "github":
+                if (existing["evidence_repo_url"] and
+                        existing["evidence_repo_url"] != req.evidence_repo_url):
+                    raise HTTPException(409, (
+                        f"project {req.org_slug}/{req.project_slug} is already bound to "
+                        f"evidence repository {existing['evidence_repo_url']}. "
+                        "Refusing to repoint it without an explicit migration."))
+                conn.execute(text(
+                    "UPDATE mem.projects SET source_provider = 'github', "
+                    " evidence_repo_url = :e, github_installation_id = :installation, "
+                    " git_default_branch = :branch, updated_at = now() WHERE id = :id"),
+                    {"id": str(existing["id"]), "e": req.evidence_repo_url,
+                     "installation": req.github_installation_id,
+                     "branch": req.git_default_branch or "main"})
             project = existing["id"]
         else:
             project = conn.execute(text(
-                "INSERT INTO mem.projects (id, tenant_id, slug, name, repo_url) "
-                "VALUES (:i, :t, :s, :n, :r) RETURNING id"),
+                "INSERT INTO mem.projects "
+                " (id, tenant_id, slug, name, repo_url, source_provider, evidence_repo_url, "
+                "  github_installation_id, git_default_branch) "
+                "VALUES (:i, :t, :s, :n, :r, :provider, :evidence, :installation, :branch) "
+                "RETURNING id"),
                 {"i": str(uuid4()), "t": str(org), "s": req.project_slug,
-                 "n": req.name or req.project_slug, "r": req.repo_url}).scalar_one()
+                 "n": req.name or req.project_slug, "r": req.repo_url,
+                 "provider": req.source_provider,
+                 "evidence": req.evidence_repo_url,
+                 "installation": req.github_installation_id,
+                 "branch": (req.git_default_branch or "main")
+                 if req.source_provider == "github" else None}).scalar_one()
 
         principal = conn.execute(text(
             "INSERT INTO mem.principals (id, tenant_id, actor, external_id, display_name) "

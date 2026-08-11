@@ -1,739 +1,115 @@
 {
   "uid": "memory-retrieval",
-  "title": "Memory — Retrieval & Context Packs",
-  "description": "The serving path. Performance gates are evaluated only when a request was observed, so an idle system reads as no traffic rather than a healthy or failing latency result.",
-  "tags": [
-    "memory-platform"
-  ],
+  "title": "Knowledge Platform | Retrieval Reliability",
+  "description": "Serving behavior under real traffic. A blank latency value means no completed request in the measurement window, not a passing or failing result.",
+  "tags": ["knowledge-platform", "retrieval", "reliability"],
   "timezone": "browser",
   "schemaVersion": 39,
   "refresh": "30s",
-  "time": {
-    "from": "now-6h",
-    "to": "now"
-  },
+  "time": {"from": "now-6h", "to": "now"},
+  "links": [
+    {"title": "Inspect traces", "url": "/explore", "targetBlank": false},
+    {"title": "Command Center", "url": "/d/memory-operations", "targetBlank": false}
+  ],
   "panels": [
+    {"type": "row", "title": "Serving health", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}},
     {
-      "type": "row",
-      "title": "Production gate",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      }
+      "type": "stat", "title": "Context pack p95", "description": "Production objective: less than 350 ms. This value is evaluated only when traffic exists.",
+      "gridPos": {"h": 5, "w": 5, "x": 0, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "memory:context_latency_p95 >= 0", "legendFormat": "p95", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "s", "decimals": 3, "noValue": "no traffic in window", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.35}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
     {
-      "type": "stat",
-      "title": "p95 context pack latency",
-      "description": "The §7.3 gate is p95 < 350 ms sustained for 7 days. No value means no completed context pack in the rolling window, not a passing result.",
-      "gridPos": {
-        "h": 5,
-        "w": 6,
-        "x": 0,
-        "y": 1
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "type": "stat", "title": "Write p99", "description": "End-to-end write-to-retrievable latency. Production objective: less than 5 seconds.",
+      "gridPos": {"h": 5, "w": 4, "x": 5, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "memory:write_latency_p99 >= 0", "legendFormat": "p99", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "s", "decimals": 2, "noValue": "no traffic in window", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 5}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Contexts / min", "description": "Current observed retrieval volume. Low volume makes percentiles less representative.",
+      "gridPos": {"h": 5, "w": 4, "x": 9, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "memory:context_pack_observations_per_minute", "legendFormat": "contexts/min", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 1, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": []},
+      "options": {"colorMode": "none", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Vector-degraded packs / hr", "description": "Packs served without the vector arm. Degradation protects callers but sustained failures need attention.",
+      "gridPos": {"h": 5, "w": 4, "x": 13, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum(increase(memory_pack_degraded_total[1h])) or vector(0)", "legendFormat": "degraded", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []},
+      "options": {"colorMode": "background", "graphMode": "none", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Median memory tokens", "description": "Memory budget consumed by a typical completed retrieval.",
+      "gridPos": {"h": 5, "w": 4, "x": 17, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "histogram_quantile(0.5, sum by (le) (rate(memory_context_pack_tokens_bucket[30m]))) >= 0", "legendFormat": "p50 tokens", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 0, "noValue": "no traffic in window", "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": []},
+      "options": {"colorMode": "none", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {
+      "type": "stat", "title": "Degraded pack ratio", "description": "Share of recent packs that omitted vector retrieval.",
+      "gridPos": {"h": 5, "w": 3, "x": 21, "y": 1}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "memory:degraded_pack_ratio", "legendFormat": "ratio", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "decimals": 1, "noValue": "no traffic in window", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "orange", "value": 0.01}, {"color": "red", "value": 0.05}]}}, "overrides": []},
+      "options": {"colorMode": "value", "graphMode": "area", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
+    },
+    {"type": "row", "title": "Latency anatomy", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 6}},
+    {
+      "type": "timeseries", "title": "Latency percentiles", "description": "End-to-end retrieval latency. Percentiles are only meaningful after requests have completed.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 7}, "datasource": {"type": "prometheus", "uid": "prometheus"},
       "targets": [
-        {
-          "refId": "A",
-          "expr": "memory:context_latency_p95 >= 0",
-          "legendFormat": "p95",
-          "instant": true,
-          "range": false
-        }
+        {"refId": "A", "expr": "memory:context_latency_p50 >= 0", "legendFormat": "p50"},
+        {"refId": "B", "expr": "memory:context_latency_p95 >= 0", "legendFormat": "p95"},
+        {"refId": "C", "expr": "memory:context_latency_p99 >= 0", "legendFormat": "p99"}
       ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "decimals": 3,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 0.35
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "noValue": "no traffic in window"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      }
+      "fieldConfig": {"defaults": {"unit": "s", "noValue": "no traffic in window", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "never"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.35}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
-      "type": "stat",
-      "title": "Packs / min",
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 6,
-        "y": 1
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "memory:context_pack_observations_per_minute",
-          "legendFormat": "packs/min",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 1,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "area",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      }
+      "type": "timeseries", "title": "p95 by stage", "description": "Independent timings for profile, embed, search, rerank, and assemble. Lines are deliberately not stacked.",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 7}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(memory_context_stage_duration_seconds_bucket[5m]))) >= 0", "legendFormat": "{{stage}}"}],
+      "fieldConfig": {"defaults": {"unit": "s", "noValue": "no traffic in window", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 8, "stacking": {"mode": "none"}, "showPoints": "never"}, "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
+    },
+    {"type": "row", "title": "Evidence and ranking", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 15}},
+    {
+      "type": "timeseries", "title": "Median candidates by retrieval arm", "description": "An arm at zero contributes no evidence. Use this before changing ranking weights.",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "histogram_quantile(0.5, sum by (le, arm) (rate(memory_retrieval_arm_hits_bucket[10m]))) >= 0", "legendFormat": "{{arm}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "no traffic in window", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 5, "showPoints": "auto"}, "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
     },
     {
-      "type": "stat",
-      "title": "Degraded packs",
-      "description": "Built without the vector arm. ADR-0008 says degrade rather than fail — but a sustained non-zero rate means the embedder is down, not blipping.",
-      "gridPos": {
-        "h": 5,
-        "w": 4,
-        "x": 10,
-        "y": 1
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum(increase(memory_pack_degraded_total[1h]))",
-          "legendFormat": "last hour",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 1
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      }
+      "type": "piechart", "title": "Trust tier of returned items", "description": "Trust composition of items delivered to callers in the selected period.",
+      "gridPos": {"h": 8, "w": 6, "x": 12, "y": 16}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (tier) (increase(memory_pack_items_total[6h]))", "legendFormat": "{{tier}}", "instant": true, "range": false}],
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "no traffic in window", "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "right", "showLegend": true}, "pieType": "donut", "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}}
     },
     {
-      "type": "stat",
-      "title": "Median pack cost",
-      "description": "Tokens the agent pays for memory on a typical request.",
-      "gridPos": {
-        "h": 5,
-        "w": 5,
-        "x": 14,
-        "y": 1
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(memory_context_pack_tokens_bucket[30m]))) >= 0",
-          "legendFormat": "p50 tokens",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "no traffic in window"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "area",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      }
+      "type": "barchart", "title": "Pack exclusions by reason", "description": "Explains thin packs: budget limits, duplicates, trust floors, or other assembly decisions.",
+      "gridPos": {"h": 8, "w": 6, "x": 18, "y": 16}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (reason) (increase(memory_pack_dropped_total[6h]))", "legendFormat": "{{reason}}", "format": "time_series", "instant": true}],
+      "fieldConfig": {"defaults": {"unit": "short", "noValue": "0", "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": []},
+      "options": {"orientation": "horizontal", "legend": {"displayMode": "hidden", "placement": "bottom", "showLegend": false}, "xTickLabelRotation": 0}
+    },
+    {"type": "row", "title": "Request outcomes", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 24}},
+    {
+      "type": "timeseries", "title": "Vector-degraded packs", "description": "Rate of fallbacks from vector retrieval over time.",
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 25}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "rate(memory_pack_degraded_total[5m])", "legendFormat": "degraded packs / second"}],
+      "fieldConfig": {"defaults": {"unit": "ops", "noValue": "0", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "single", "sort": "none"}}
     },
     {
-      "type": "stat",
-      "title": "p99 write → retrievable",
-      "description": "§7.3 gate: p99 under 5 s. Timed around the whole write including the synchronous embed.",
-      "gridPos": {
-        "h": 5,
-        "w": 5,
-        "x": 19,
-        "y": 1
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "memory:write_latency_p99 >= 0",
-          "legendFormat": "p99",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "decimals": 2,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 5
-              }
-            ]
-          },
-          "noValue": "no traffic in window"
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      }
-    },
-    {
-      "type": "row",
-      "title": "Where the time goes",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 6
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Latency percentiles",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 7
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "memory:context_latency_p50 >= 0",
-          "legendFormat": "p50"
-        },
-        {
-          "refId": "B",
-          "expr": "memory:context_latency_p95 >= 0",
-          "legendFormat": "p95"
-        },
-        {
-          "refId": "C",
-          "expr": "memory:context_latency_p99 >= 0",
-          "legendFormat": "p99"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 5,
-            "showPoints": "never"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 0.35
-              }
-            ]
-          },
-          "noValue": "no traffic in window"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "p95 by stage",
-      "description": "profile / embed / search / rerank / assemble. Percentiles are independent timings and must not be stacked: a stacked p95 invents a total that no request experienced.",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 7
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (le, stage) (rate(memory_context_stage_duration_seconds_bucket[5m]))) >= 0",
-          "legendFormat": "{{stage}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "stacking": {
-              "mode": "none"
-            },
-            "showPoints": "never"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "no traffic in window"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "row",
-      "title": "Retrieval arms and what they return",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 15
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Median rows per arm",
-      "description": "Five arms fuse with RRF. An arm flat at zero is contributing nothing — the graph arm sat at 0% until entity extraction landed, and nothing surfaced it.",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 16
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le, arm) (rate(memory_retrieval_arm_hits_bucket[10m]))) >= 0",
-          "legendFormat": "{{arm}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 5,
-            "showPoints": "auto"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "no traffic in window"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "piechart",
-      "title": "Trust tier of returned items",
-      "description": "Capability C4 wants ≥95% correct trust attribution. Tier 0 must never appear here at all.",
-      "gridPos": {
-        "h": 8,
-        "w": 6,
-        "x": 12,
-        "y": 16
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (tier) (increase(memory_pack_items_total[6h]))",
-          "legendFormat": "{{tier}}",
-          "instant": true,
-          "range": false
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "no traffic in window"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "right",
-          "showLegend": true
-        },
-        "pieType": "donut",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        }
-      }
-    },
-    {
-      "type": "barchart",
-      "title": "Why candidates were dropped",
-      "description": "Budget exhaustion vs MMR duplicates vs tier floor. This is the panel that explains a thin pack.",
-      "gridPos": {
-        "h": 8,
-        "w": 6,
-        "x": 18,
-        "y": 16
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (reason) (increase(memory_pack_dropped_total[6h]))",
-          "legendFormat": "{{reason}}",
-          "format": "time_series",
-          "instant": true
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "orientation": "horizontal",
-        "legend": {
-          "displayMode": "hidden",
-          "placement": "bottom",
-          "showLegend": false
-        },
-        "xTickLabelRotation": 0
-      }
-    },
-    {
-      "type": "row",
-      "title": "Traffic and refusals",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 24
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "API requests by status",
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 0,
-        "y": 25
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (status) (rate(http_requests_total[5m]))",
-          "legendFormat": "{{status}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 15,
-            "stacking": {
-              "mode": "normal"
-            },
-            "showPoints": "never"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Refusals: scope, rate limit, backpressure",
-      "description": "Scope denials counting up is the isolation model working. A burst is someone probing.",
-      "gridPos": {
-        "h": 7,
-        "w": 12,
-        "x": 12,
-        "y": 25
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "sum by (reason) (rate(memory_scope_denied_total[5m]))",
-          "legendFormat": "denied: {{reason}}"
-        },
-        {
-          "refId": "B",
-          "expr": "sum by (kind) (rate(memory_rate_limited_total[5m]))",
-          "legendFormat": "rate limited: {{kind}}"
-        },
-        {
-          "refId": "C",
-          "expr": "rate(memory_backpressure_total[5m])",
-          "legendFormat": "backpressure"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqps",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 10,
-            "showPoints": "auto"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "text",
-                "value": null
-              }
-            ]
-          },
-          "noValue": "0"
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
+      "type": "timeseries", "title": "API response outcomes", "description": "All API requests by response status. Use Explore to correlate errors with trace and log evidence.",
+      "gridPos": {"h": 7, "w": 12, "x": 12, "y": 25}, "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (status) (rate(http_requests_total[5m]))", "legendFormat": "{{status}}"}],
+      "fieldConfig": {"defaults": {"unit": "reqps", "noValue": "0", "custom": {"drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "stacking": {"mode": "normal"}, "showPoints": "never"}, "thresholds": {"mode": "absolute", "steps": [{"color": "text", "value": null}]}}, "overrides": []},
+      "options": {"legend": {"displayMode": "list", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}}
     }
   ]
 }

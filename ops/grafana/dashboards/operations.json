@@ -1,499 +1,111 @@
 {
   "uid": "memory-operations",
-  "title": "Memory - Operations & Alerts",
-  "description": "Start here during an incident: separate paging severity from readiness, then use the focused retrieval or curation dashboard to diagnose the failed contract. Dashboard links stay inside Grafana so they remain valid outside local development.",
-  "tags": [
-    "memory-platform",
-    "operations",
-    "alerts"
-  ],
+  "title": "Knowledge Platform | Command Center",
+  "description": "Start here. It answers whether the platform can serve scoped knowledge now, whether an operator needs to act, and where to investigate next. Product-quality and curation work belongs on the focused dashboards, not in this incident view.",
+  "tags": ["knowledge-platform", "command-center", "operations"],
   "timezone": "browser",
   "schemaVersion": 39,
   "refresh": "30s",
-  "time": {
-    "from": "now-6h",
-    "to": "now"
-  },
+  "time": { "from": "now-6h", "to": "now" },
   "links": [
-    {
-      "title": "Alerting",
-      "url": "/alerting/list",
-      "type": "link",
-      "icon": "bell",
-      "targetBlank": true
-    },
-    {
-      "title": "Explore metrics",
-      "url": "/explore",
-      "type": "link",
-      "icon": "external link",
-      "targetBlank": true
-    }
+    { "title": "Alerting", "url": "/alerting/list", "type": "link", "icon": "bell", "targetBlank": false },
+    { "title": "Explore metrics", "url": "/explore", "type": "link", "icon": "external link", "targetBlank": false }
   ],
   "panels": [
+    { "type": "row", "title": "Act now", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 } },
     {
-      "type": "row",
-      "title": "Incident summary",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+      "type": "stat", "title": "Critical alerts", "description": "A non-zero value is an active incident. Open Alerting for ownership, grouping, and silences.",
+      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 1 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "count(ALERTS{alertstate=\"firing\",severity=\"critical\"}) or vector(0)", "instant": true, "range": false }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
     },
     {
-      "type": "stat",
-      "title": "Firing alerts",
-      "description": "All currently firing Prometheus alerts, including low-priority SLO early warnings. Use the critical and warning counts beside it to decide whether this is an incident.",
-      "gridPos": { "h": 6, "w": 4, "x": 0, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "count(ALERTS{alertstate=\"firing\"})", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 1 },
-              { "color": "red", "value": 5 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
+      "type": "stat", "title": "Warning alerts", "description": "Warnings need engineering attention but are not a page. Informational SLO signals remain in the alert inventory.",
+      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 1 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "count(ALERTS{alertstate=\"firing\",severity=\"warning\"}) or vector(0)", "instant": true, "range": false }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 1 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
     },
     {
-      "type": "stat",
-      "title": "Critical alerts",
-      "description": "Critical alerts require active investigation. The no-evidence and product-quality warnings remain visible but do not page at this severity.",
-      "gridPos": { "h": 6, "w": 4, "x": 4, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "count(ALERTS{alertstate=\"firing\",severity=\"critical\"}) or vector(0)", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
+      "type": "stat", "title": "Core service readiness", "description": "API, Console, MCP, Postgres, and PgBouncer endpoint contracts. This is more meaningful than container or exporter process state.",
+      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 1 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(probe_success{criticality=\"critical\"}) / count(probe_success{criticality=\"critical\"})", "instant": true, "range": false }],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "decimals": 0, "noValue": "pending", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "orange", "value": 0.8 }, { "color": "green", "value": 1 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
     },
     {
-      "type": "stat",
-      "title": "Critical readiness",
-      "description": "Fraction of API, Console, MCP, Postgres, and PgBouncer readiness contracts passing now.",
-      "gridPos": { "h": 6, "w": 4, "x": 8, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "sum(probe_success{criticality=\"critical\"}) / count(probe_success{criticality=\"critical\"})", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 0,
-          "noValue": "pending",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 0.8 },
-              { "color": "green", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
+      "type": "stat", "title": "Context requests / min", "description": "Recent retrieval traffic. A zero means there is no current serving sample; it is not a passing latency result.",
+      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 1 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "memory:context_pack_observations_per_minute", "instant": true, "range": false }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 1, "noValue": "0" }, "overrides": [] },
+      "options": { "colorMode": "none", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
     },
     {
-      "type": "stat",
-      "title": "Alert delivery failures",
-      "description": "Failed outbound Alertmanager notifications in the last 15 minutes. This remains zero when no external webhook is configured; configure ALERT_WEBHOOK_URL to route alerts to people.",
-      "gridPos": { "h": 6, "w": 4, "x": 12, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "sum(increase(alertmanager_notifications_failed_total[15m])) or vector(0)", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "noValue": "0",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
+      "type": "stat", "title": "Review backlog (all projects)", "description": "Portfolio-level curation pressure. Select a project in Knowledge Governance before taking a review action.",
+      "gridPos": { "h": 6, "w": 4, "x": 16, "y": 1 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(memory_inbox_depth)", "instant": true, "range": false }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 100 }, { "color": "red", "value": 200 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
     },
     {
-      "type": "stat",
-      "title": "Warning alerts",
-      "description": "Warnings need active engineering attention but are not a page. Informational SLO signals remain visible in the alert inventory below without inflating this number.",
-      "gridPos": { "h": 6, "w": 4, "x": 16, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "count(ALERTS{alertstate=\"firing\",severity=\"warning\"}) or vector(0)", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "noValue": "pending",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
+      "type": "stat", "title": "Notification delivery failures", "description": "Outbound Alertmanager notification failures in the last 15 minutes. A zero is expected when no local webhook is configured.",
+      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 1 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum(increase(alertmanager_notifications_failed_total[15m])) or vector(0)", "instant": true, "range": false }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+
+    { "type": "row", "title": "Service contracts", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 } },
+    {
+      "type": "stat", "title": "Core endpoints", "description": "Each value is an externally exercised readiness contract.",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 8 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "probe_success{criticality=\"critical\"}", "legendFormat": "{{service}}", "instant": true, "range": false }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "noValue": "pending", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "orientation": "horizontal", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
     },
     {
-      "type": "stat",
-      "title": "Prometheus targets up",
-      "description": "Scrape target availability. Synthetic endpoint checks below are the authoritative service contract, while this catches missing exporter processes.",
-      "gridPos": { "h": 6, "w": 4, "x": 20, "y": 1 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "sum(up) / count(up)", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 0,
-          "noValue": "pending",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "orange", "value": 0.9 },
-              { "color": "green", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
+      "type": "stat", "title": "Investigation systems", "description": "Grafana, Prometheus, Alertmanager, logs, traces, and collector readiness. A failure weakens incident evidence even if requests still serve.",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 8 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "probe_success{criticality=\"observability\"}", "legendFormat": "{{service}}", "instant": true, "range": false }],
+      "fieldConfig": { "defaults": { "unit": "short", "decimals": 0, "noValue": "pending", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "orientation": "horizontal", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
     },
     {
-      "type": "row",
-      "title": "Service readiness contracts",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 7 }
+      "type": "stat", "title": "Runtime loop age", "description": "Seconds since the scheduler and worker event loops last advanced. It detects a stuck loop whose HTTP metrics endpoint still responds.",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "time() - memory_service_heartbeat_timestamp_seconds", "legendFormat": "{{service}}", "instant": true, "range": false }],
+      "fieldConfig": { "defaults": { "unit": "s", "decimals": 0, "noValue": "waiting for rollout", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 45 }, { "color": "red", "value": 90 }] } }, "overrides": [] },
+      "options": { "colorMode": "background", "graphMode": "none", "orientation": "horizontal", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+    },
+
+    { "type": "row", "title": "Investigate", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 } },
+    {
+      "type": "table", "title": "Current alert inventory", "description": "The exact active labels and severity. Use Alerting to assign, group, or silence an alert.",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 17 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "ALERTS{alertstate=\"firing\"}", "format": "table", "instant": true, "range": false }],
+      "fieldConfig": { "defaults": { "custom": { "align": "auto", "inspect": false } }, "overrides": [] }, "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } }
     },
     {
-      "type": "stat",
-      "title": "Critical services",
-      "description": "Readiness probes exercise the public dependency contract rather than merely checking whether a container is running.",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "probe_success{criticality=\"critical\"}", "legendFormat": "{{service}}", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "noValue": "pending",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
+      "type": "timeseries", "title": "Core endpoint history", "description": "A step down to zero identifies the contract that failed. Optional reranker is intentionally excluded; its effect belongs on Retrieval Reliability.",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 17 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "probe_success{criticality=\"critical\"}", "legendFormat": "{{service}}" }],
+      "fieldConfig": { "defaults": { "min": 0, "max": 1, "unit": "short", "custom": { "drawStyle": "line", "lineInterpolation": "stepAfter", "lineWidth": 2, "fillOpacity": 8, "showPoints": "never", "spanNulls": false }, "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
     },
     {
-      "type": "stat",
-      "title": "Observability services",
-      "description": "Evidence systems are monitored separately so an investigation does not discover that logs, traces, dashboards, or alert routing were unavailable.",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "probe_success{criticality=\"observability\"}", "legendFormat": "{{service}}", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "noValue": "pending",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
+      "type": "timeseries", "title": "API response outcomes", "description": "Request rate by response class. A 4xx spike is usually caller or scope behavior; 5xx is a serving failure.",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "sum by (status) (rate(http_requests_total[5m]))", "legendFormat": "{{status}}" }],
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 10, "showPoints": "never" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
     },
     {
-      "type": "row",
-      "title": "Runtime liveness and dependencies",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 }
-    },
-    {
-      "type": "stat",
-      "title": "Worker and scheduler heartbeat age",
-      "description": "Seconds since each event loop last advanced. This catches a stuck loop even when its metrics server still answers.",
-      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 17 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "time() - memory_service_heartbeat_timestamp_seconds", "legendFormat": "{{service}}", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "decimals": 0,
-          "noValue": "waiting for rollout",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "orange", "value": 45 },
-              { "color": "red", "value": 90 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Database and pool backend health",
-      "description": "Exporter process health is not enough. These are authenticated checks against Postgres and PgBouncer themselves.",
-      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 17 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "pg_up", "legendFormat": "postgres", "instant": true, "range": false },
-        { "refId": "B", "expr": "pgbouncer_up", "legendFormat": "pgbouncer", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "noValue": "pending",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Reranker contract",
-      "description": "The API is the only process that selects the reranker. Showing worker or scheduler configuration here created three contradictory values for one serving decision.",
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 17 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "memory_rerank_enabled{job=\"memory-api\"}", "legendFormat": "api profile", "instant": true, "range": false },
-        { "refId": "B", "expr": "probe_success{service=\"reranker\"}", "legendFormat": "endpoint", "instant": true, "range": false }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "noValue": "waiting for rollout",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "background",
-        "graphMode": "none",
-        "orientation": "horizontal",
-        "textMode": "value_and_name",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
-      }
-    },
-    {
-      "type": "row",
-      "title": "Live investigation evidence",
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 }
-    },
-    {
-      "type": "table",
-      "title": "Firing alerts",
-      "description": "The exact active alert labels from Prometheus. Route, grouping, acknowledgment, and silences are in Alertmanager.",
-      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 26 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "ALERTS{alertstate=\"firing\"}", "format": "table", "instant": true, "range": false }
-      ],
-      "fieldConfig": { "defaults": { "custom": { "align": "auto", "inspect": false } }, "overrides": [] },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": { "show": false }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Readiness probe history",
-      "description": "One is passing; zero is a failing endpoint. Optional reranker history is intentionally excluded because its separate contract above determines whether it matters.",
-      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 26 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "probe_success{criticality=~\"critical|observability\"}", "legendFormat": "{{service}}", "range": true }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "max": 1,
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 2,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "red", "value": null },
-              { "color": "green", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Alertmanager notification attempts",
-      "description": "Outbound notification rate by receiver. A non-zero failed series means the route exists but the configured webhook relay is not accepting notifications.",
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 36 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "sum by (integration) (rate(alertmanager_notifications_total[5m]))", "legendFormat": "sent {{integration}}" },
-        { "refId": "B", "expr": "sum by (integration) (rate(alertmanager_notifications_failed_total[5m]))", "legendFormat": "failed {{integration}}" }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "lineWidth": 2,
-            "fillOpacity": 8,
-            "showPoints": "auto",
-            "spanNulls": false
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "desc" }
-      }
-    },
-    {
-      "type": "table",
-      "title": "Prometheus scrape targets",
-      "description": "Shows the raw exporter target state. A target can be up while its service contract fails, which is why readiness probes are shown separately above.",
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 36 },
-      "datasource": { "type": "prometheus", "uid": "prometheus" },
-      "targets": [
-        { "refId": "A", "expr": "up", "format": "table", "instant": true, "range": false }
-      ],
-      "fieldConfig": { "defaults": { "custom": { "align": "auto", "inspect": false } }, "overrides": [] },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": { "show": false }
-      }
+      "type": "timeseries", "title": "Portfolio review backlog", "description": "All project queues. Use Knowledge Governance to isolate the project whose queue requires action.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 27 }, "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "refId": "A", "expr": "memory_inbox_depth", "legendFormat": "{{project}}" }],
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "lineWidth": 2, "fillOpacity": 12, "showPoints": "never" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 100 }, { "color": "red", "value": 200 }] } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } }
     }
   ]
 }

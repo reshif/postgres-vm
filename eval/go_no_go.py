@@ -221,14 +221,37 @@ def capability_scorecard() -> None:
         ("C2 recurrence (turns-to-diagnosis)",
          "needs multi-turn agent sessions; turns cannot be counted without an "
          "agent in the loop"),
-        ("C3 temporal (Suite 3 pass rate)",
-         "Suite 3 cases are not authored; the as-of machinery is tested in "
-         "tests/test_temporal.py but that is not the same measurement"),
+
         ("C6 procedure execution",
          "needs an executing agent to count steps followed and preconditions "
          "checked; eval/procedural.py scaffolds the cases only"),
     ]:
         record("7.1 capability", cap, UNMEASURED, why)
+
+
+def suite_three() -> None:
+    """C3 from the recorded temporal-correctness run (eval/suite3_temporal.py)."""
+    tenant = UUID(settings().dev_tenant_id)
+    project = UUID(settings().dev_project_id)
+    with db.scoped(tenant, tenant, project) as conn:
+        row = conn.execute(text(
+            "SELECT status, metrics, completed_at FROM mem.evaluation_runs "
+            " WHERE tenant_id = :t AND suite = 'temporal-correctness' "
+            " ORDER BY completed_at DESC LIMIT 1"),
+            {"t": str(tenant)}).mappings().one_or_none()
+    if row is None:
+        record("7.1 capability", "C3 temporal (Suite 3 pass rate)", UNMEASURED,
+               "no temporal-correctness run recorded; run eval/suite3_temporal.py")
+        return
+    m = row["metrics"] or {}
+    rate = float(m.get("pass_rate", 0.0))
+    failing = m.get("failing") or []
+    detail = (f"{rate:.1%} over {m.get('case_count', '?')} cases "
+              f"(gate >= {float(m.get('gate', 0.9)):.0%})")
+    if failing:
+        detail += f". Failing: {'; '.join(failing)[:180]}"
+    record("7.1 capability", "C3 temporal (Suite 3 pass rate)",
+           MEASURED if rate >= float(m.get("gate", 0.9)) else FAILED, detail)
 
 
 def headline_gate() -> None:
@@ -303,11 +326,41 @@ def production_gate() -> None:
                f"median depth {depth:.0f} over 14d (gate < 40)")
 
     # Suite 2 at 100% for 30 consecutive days. Passing today is not the gate.
-    record("7.3 production", "Suite 2 isolation 100% for 30 consecutive days",
-           UNMEASURED,
-           "passes today (test_rls_coverage, test_isolation, pgTAP), but the gate "
-           "is 30 CONSECUTIVE days and no run history is retained to prove it. "
-           "Recording each run into mem.evaluation_runs would make this checkable")
+    # Computed from retained history now that tests/run-all.sh records every
+    # isolation result — pass AND fail. "Passes today" was never the gate.
+    tenant = UUID(settings().dev_tenant_id)
+    project = UUID(settings().dev_project_id)
+    with db.scoped(tenant, tenant, project) as conn:
+        iso = conn.execute(text(
+            "SELECT count(*) AS runs, "
+            "       count(*) FILTER (WHERE status <> 'passed') AS failures, "
+            "       count(DISTINCT date_trunc('day', completed_at)) AS days, "
+            "       min(completed_at) AS first_run "
+            "  FROM mem.evaluation_runs "
+            " WHERE tenant_id = :t AND suite = 'isolation' "
+            "   AND completed_at >= now() - interval '30 days'"),
+            {"t": str(tenant)}).mappings().one()
+    if iso["runs"] == 0:
+        record("7.3 production", "Suite 2 isolation 100% for 30 consecutive days",
+               UNMEASURED,
+               "no isolation runs recorded yet. tests/run-all.sh now records every "
+               "result, pass or fail — the streak starts accumulating from the "
+               "next run")
+    elif iso["failures"]:
+        record("7.3 production", "Suite 2 isolation 100% for 30 consecutive days",
+               FAILED,
+               f"{iso['failures']} failing run(s) of {iso['runs']} in the last 30 "
+               "days. Suite 2 is zero-tolerance; the 30-day clock restarts")
+    elif int(iso["days"]) < 30:
+        record("7.3 production", "Suite 2 isolation 100% for 30 consecutive days",
+               UNMEASURED,
+               f"{iso['runs']} run(s) across {iso['days']} distinct day(s), all "
+               f"passing, first on {iso['first_run'].date().isoformat()}. The gate "
+               "needs 30; this is the streak building, not the gate met")
+    else:
+        record("7.3 production", "Suite 2 isolation 100% for 30 consecutive days",
+               MEASURED,
+               f"{iso['runs']} runs across {iso['days']} days, zero failures")
 
     record("7.3 production", "Suite 5 injection 100%", MEASURED,
            "tests/test_injection.py passes; quarantine and tier caps verified by "
@@ -335,6 +388,7 @@ def main() -> int:
     print("=" * 78)
 
     suite_one()
+    suite_three()
     capability_scorecard()
     headline_gate()
     production_gate()

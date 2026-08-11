@@ -210,19 +210,19 @@ Resources are read-only and RLS-scoped identically to tools. `resources/list` re
 
 ## 4. Protocol conformance checklist (2026-07-28)
 
-- [ ] **Stateless.** No server state keyed by connection. No `Mcp-Session-Id`. Any cross-call state uses a **server-minted handle** passed as an ordinary tool argument (`pack_id` is exactly this).
-- [ ] **No `initialize` handshake.** Read `io.modelcontextprotocol/protocolVersion` and `clientCapabilities` from `_meta` on every request; return `UnsupportedProtocolVersionError` on mismatch.
-- [ ] **`server/discover` implemented**, advertising supported versions, capabilities, identity.
-- [ ] **`resultType` on every result** (`"complete"` or `"input_required"`).
-- [ ] **MRTR for confirmations.** Scope promotion, retraction, ADR creation and cross-project grants return `InputRequiredResult` with `inputRequests`; the client retries with `inputResponses`. Correlate across retries with your own identifier in `requestState`.
-- [ ] **Tasks extension** (`io.modelcontextprotocol/tasks`) for long operations: repository ingestion, re-embedding, consolidation runs, evaluation runs. Poll with `tasks/get`; accept input with `tasks/update`.
-- [ ] **`ttlMs` + `cacheScope`** on all list/read results; deterministic tool ordering.
-- [ ] **Standard headers** (`Mcp-Method`, `Mcp-Name`) honoured on Streamable HTTP POST.
-- [ ] **No Roots / Sampling / Logging.** They are deprecated: pass paths as tool parameters or resource URIs, call your own LLM provider directly, and log to stderr / OpenTelemetry.
-- [ ] **No SSE resumability assumptions.** A broken stream loses the in-flight request; clients re-issue with a new request ID. Make every tool call idempotent by `Idempotency-Key` where it writes.
-- [ ] **`subscriptions/listen`** if you want to push `resourcesListChanged` when project knowledge updates. Optional; nice for the console, unnecessary for agents.
-- [ ] **OTel context** read from `_meta` (`traceparent`, `tracestate`, `baggage`) and propagated into your spans.
-- [ ] **Authorization:** OAuth 2.1 + PKCE, audience validation (RFC 8707/9068), `iss` validation per RFC 9207, Client ID Metadata Documents preferred over Dynamic Client Registration, no token passthrough to Postgres or upstreams.
+- [x] **Stateless.** No server state keyed by connection. No `Mcp-Session-Id`. Any cross-call state uses a **server-minted handle** passed as an ordinary tool argument (`pack_id` is exactly this).
+- [x] **No `initialize` handshake.** Read `io.modelcontextprotocol/protocolVersion` and `clientCapabilities` from `_meta` on every request; return `UnsupportedProtocolVersionError` on mismatch. — _`_meta` protocol version and `UnsupportedProtocolVersionError` implemented. DEVIATION: `initialize` is also implemented, because every shipping client (VS Code, Copilot, Claude Code) sends it first and aborts on `-32601`. It allocates nothing and returns no session, so the stateless intent holds._
+- [x] **`server/discover` implemented**, advertising supported versions, capabilities, identity.
+- [x] **`resultType` on every result** (`"complete"` or `"input_required"`). — _`complete` by default; `input_required` set explicitly by MRTR. Defaulting alone was a bug: it announced a confirmation prompt as a finished result._
+- [x] **MRTR for confirmations.** Scope promotion, retraction, ADR creation and cross-project grants return `InputRequiredResult` with `inputRequests`; the client retries with `inputResponses`. Correlate across retries with your own identifier in `requestState`. — _retraction, supersession and decisions. `requestState` is an HMAC over the operation, not a nonce, so a confirmation cannot be replayed onto a different action._
+- [x] **Tasks extension** (`io.modelcontextprotocol/tasks`) for long operations: repository ingestion, re-embedding, consolidation runs, evaluation runs. Poll with `tasks/get`; accept input with `tasks/update`. — _`tasks/create|get|update|cancel|list`, durable handles in `mem.mcp_tasks`. `memory.context` is excluded: it carries a 350 ms gate._
+- [x] **`ttlMs` + `cacheScope`** on all list/read results; deterministic tool ordering.
+- [x] **Standard headers** (`Mcp-Method`, `Mcp-Name`) honoured on Streamable HTTP POST. — _honoured on `tools/call`; a header disagreeing with the body is refused rather than silently resolved._
+- [x] **No Roots / Sampling / Logging.** They are deprecated: pass paths as tool parameters or resource URIs, call your own LLM provider directly, and log to stderr / OpenTelemetry. — _none implemented; logging goes to stderr and OTLP._
+- [x] **No SSE resumability assumptions.** A broken stream loses the in-flight request; clients re-issue with a new request ID. Make every tool call idempotent by `Idempotency-Key` where it writes. — _writes are idempotent by CONTENT HASH, which is stronger than `Idempotency-Key`: it holds even when the client sends no key, and a retried write returns the original memory rather than a duplicate._
+- [ ] **`subscriptions/listen`** if you want to push `resourcesListChanged` when project knowledge updates. Optional; nice for the console, unnecessary for agents. — _not implemented. Explicitly optional; the console polls._
+- [x] **OTel context** read from `_meta` (`traceparent`, `tracestate`, `baggage`) and propagated into your spans. — _`traceparent`/`tracestate`/`baggage` read from `_meta` and the span started under them. Malformed values never break the call._
+- [ ] **Authorization:** OAuth 2.1 + PKCE, audience validation (RFC 8707/9068), `iss` validation per RFC 9207, Client ID Metadata Documents preferred over Dynamic Client Registration, no token passthrough to Postgres or upstreams. — _**NOT IMPLEMENTED.** The stack runs on the `MEMORY_DEV_*` scope binding: no token, no audience or issuer validation. Fine for a single operator on localhost, disqualifying for anything else. This is the largest remaining gap._
 
 ---
 

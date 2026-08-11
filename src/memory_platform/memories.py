@@ -898,6 +898,7 @@ def search(
     tenant_id: UUID | None = None,
     project_id: UUID | None = None,
     as_of: datetime | None = None,
+    profile_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Hybrid retrieval. Falls back to the lexical arm alone if the embedder is
     down, rather than returning nothing (ADR-0008)."""
@@ -951,7 +952,13 @@ def search(
     # imports all three, and a cycle here would surface as an import error only
     # on the worker, which loads modules in a different order).
     from . import planner, ranking, reranker
-    _, weights = ranking.load_profile(conn)
+    # An explicit profile makes weight changes MEASURABLE. context.build_pack has
+    # always taken one; search did not, so the only way to compare two weightings
+    # was to flip which profile is active globally — which changes the answer for
+    # every concurrent caller and cannot be done inside one evaluation run.
+    # eval/utility_ab.py needs exactly this to A/B a single weight.
+    _, weights = (ranking.load_profile(conn, profile_id) if profile_id
+                  else ranking.load_profile(conn))
     qplan = planner.plan(query)
     cands, rr_meta = reranker.apply(query, [dict(r) for r in rows])
     # Order matters: cross-encoder first, feature model second. The blueprint puts

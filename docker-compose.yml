@@ -342,6 +342,15 @@ services:
       MEMORY_DEV_TENANT_ID: ${MEMORY_DEV_TENANT_ID:-}
       MEMORY_DEV_PROJECT_ID: ${MEMORY_DEV_PROJECT_ID:-}
       MEMORY_DEV_PRINCIPAL_ID: ${MEMORY_DEV_PRINCIPAL_ID:-}
+      # GitHub verifies the delivery signature before a body is parsed or any
+      # project is resolved. Keep this disabled until the App is installed.
+      MEMORY_GITHUB_ENABLED: ${MEMORY_GITHUB_ENABLED:-false}
+      MEMORY_GITHUB_WEBHOOK_SECRET: ${MEMORY_GITHUB_WEBHOOK_SECRET:-}
+      MEMORY_GITHUB_APP_ID: ${MEMORY_GITHUB_APP_ID:-}
+      MEMORY_GITHUB_PRIVATE_KEY: ${MEMORY_GITHUB_PRIVATE_KEY:-}
+      MEMORY_GITHUB_API_URL: ${MEMORY_GITHUB_API_URL:-https://api.github.com}
+      MEMORY_GITHUB_EVIDENCE_SUFFIX: ${MEMORY_GITHUB_EVIDENCE_SUFFIX:--evidence}
+      MEMORY_GITHUB_WEBHOOK_MAX_BYTES: ${MEMORY_GITHUB_WEBHOOK_MAX_BYTES:-1048576}
     # No `embeddings` dependency: it is profile-gated now, and compose refuses to
     # start a service that depends on an inactive-profile service. The embedder is
     # a host process outside compose's lifecycle either way — /readyz reports it as
@@ -406,7 +415,14 @@ services:
       <<: *common-env
       MEMORY_DATABASE_URL: postgresql+psycopg://memory_app:${DB_APP_PASSWORD:?set in .env}@postgres:5432/memory
       MEMORY_ROLE: worker
-      MEMORY_WORKER_QUEUES: embedding,ingestion,extraction
+      MEMORY_WORKER_QUEUES: embedding,ingestion,extraction,github
+      # The worker reads immutable Git objects through the App API; it never
+      # needs a source checkout mounted from the host.
+      MEMORY_GITHUB_APP_ID: ${MEMORY_GITHUB_APP_ID:-}
+      MEMORY_GITHUB_PRIVATE_KEY: ${MEMORY_GITHUB_PRIVATE_KEY:-}
+      MEMORY_GITHUB_API_URL: ${MEMORY_GITHUB_API_URL:-https://api.github.com}
+      MEMORY_GITHUB_MAX_BLOB_BYTES: ${MEMORY_GITHUB_MAX_BLOB_BYTES:-262144}
+      MEMORY_GITHUB_MAX_SYNC_FILES: ${MEMORY_GITHUB_MAX_SYNC_FILES:-250}
       # Internal-only Prometheus listener for event-loop heartbeats.
       MEMORY_METRICS_PORT: "9101"
     # The `embedding` queue calls out to host Ollama.
@@ -608,6 +624,45 @@ services:
     depends_on:
       prometheus: { condition: service_started }
       loki: { condition: service_started }
+
+  # ------------------------------------------------------------ local IdP
+  # A REAL identity provider, for verifying the auth path against something that
+  # serves OIDC discovery and a JWKS rather than a synthetic key.
+  #
+  #   docker compose --profile auth up -d keycloak
+  #   sh ops/verify-oauth.sh
+  #
+  # Behind a profile because it is a verification dependency, not part of the
+  # stack: the platform must run without it, and in production the issuer is
+  # whatever the operator already uses.
+  #
+  # `start-dev` is correct HERE and nowhere else — it disables HTTPS enforcement
+  # and uses an in-memory database, so the realm is rebuilt from the import on
+  # every start and no state survives to drift from the file.
+  keycloak:
+    profiles: ["auth"]
+    image: quay.io/keycloak/keycloak:26.0
+    restart: unless-stopped
+    command: ["start-dev", "--import-realm", "--http-port=8090"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      # The issuer a token carries must be the URL the API will validate against,
+      # and the API reaches Keycloak by its service name while a browser reaches
+      # it on localhost. Fixing the hostname makes both see one issuer string —
+      # otherwise every token fails issuer validation from one side or the other.
+      KC_HOSTNAME: http://keycloak:8090
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "false"
+      KC_HTTP_ENABLED: "true"
+    volumes:
+      - "./ops/keycloak:/opt/keycloak/data/import:ro"
+    ports: ["8090:8090"]
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8090 && echo ok >&3 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
 
   # ---------------------------------------------------------------- backups
   # Volumes survive a restart. They do not survive a deleted volume or a dead

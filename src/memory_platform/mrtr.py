@@ -122,6 +122,13 @@ def issue(tool: str, args: dict[str, Any], reason: str) -> dict[str, Any]:
     state = f"{expires}.{base64.urlsafe_b64encode(digest).decode().rstrip('=')}"
 
     return {
+        # 02-MCP-CONTRACT.md §216: every result carries a resultType of
+        # "complete" or "input_required". Set EXPLICITLY here because
+        # mcp_server._result defaults it to "complete" — which would have
+        # announced this confirmation prompt as a finished result, so a strict
+        # client would take the answer and never ask the human. The inputRequests
+        # below would have been decoration.
+        "resultType": "input_required",
         # The extension's shape: not an error. An error tells the agent it did
         # something wrong and invites a retry with different arguments; this is a
         # question with a resumable answer.
