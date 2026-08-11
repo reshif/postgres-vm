@@ -29,7 +29,7 @@ log = logging.getLogger("memory.ranking")
 
 # Bumped by migration 0009. load_profile() falls back to any active row, so a
 # deployment mid-migration degrades to the previous profile rather than raising.
-DEFAULT_PROFILE = "default@2"
+DEFAULT_PROFILE = "default@3"   # v3 ships utility disabled; see migration 0045
 
 
 def load_profile(conn: Connection, profile_id: str = DEFAULT_PROFILE) -> tuple[str, dict]:

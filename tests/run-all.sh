@@ -41,7 +41,7 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
-SUITES="test_rls_coverage test_isolation test_write_path test_ingest test_context test_planner test_evidence test_hybrid_lexical test_identifier_arm test_capture test_binding test_github_project_binding test_github_evidence test_github_client test_evidence_assertions test_github_sidecar_sync test_cli test_cli_github_native test_entities test_injection test_conflicts test_inbox test_extraction test_temporal test_console_data test_evaluations test_maintenance test_consolidation test_distillation test_arms test_org_entities test_limits test_auth test_mcp test_mcp_extensions test_eval_snapshot test_eval_cases test_eval_export test_eval_latency_gate test_observability"
+SUITES="test_rls_coverage test_isolation test_write_path test_ingest test_context test_planner test_evidence test_hybrid_lexical test_identifier_arm test_capture test_binding test_github_project_binding test_github_evidence test_github_client test_evidence_assertions test_github_sidecar_sync test_github_assertion_retrieval test_cli test_cli_github_native test_entities test_injection test_conflicts test_inbox test_extraction test_temporal test_console_data test_evaluations test_maintenance test_consolidation test_distillation test_arms test_org_entities test_limits test_auth test_mcp test_mcp_extensions test_eval_snapshot test_eval_cases test_eval_export test_eval_latency_gate test_observability"
 FAILED=""
 
 # Ordered deliberately: RLS coverage runs FIRST. It is the structural check, and
@@ -100,7 +100,7 @@ printf 'all suites passed\n'
 $DOCKER compose exec -T postgres psql -U memory_owner -d memory -q -c \
   "DELETE FROM mem.organizations WHERE slug IN
    ('tenant-a','tenant-b','tenant-c','leak-a','leak-b','ing','ctx','cap','ent','redteam','conf','ibx','temporal','maint','llmx','identarm')
-   OR slug LIKE 'auth-%' OR slug LIKE 'cli-%' OR slug LIKE 'github-binding-%' OR slug LIKE 'console-test-%' OR slug LIKE 'console-%' OR slug LIKE 'eval-ui-%' OR slug LIKE 'mcp-%' OR slug LIKE 'hybrid-%';
+   OR slug LIKE 'auth-%' OR slug LIKE 'cli-%' OR slug LIKE 'github-binding-%' OR slug LIKE 'github-retrieval-%' OR slug LIKE 'console-test-%' OR slug LIKE 'console-%' OR slug LIKE 'eval-ui-%' OR slug LIKE 'mcp-%' OR slug LIKE 'hybrid-%';
    DELETE FROM mem.memories WHERE memory_key LIKE 'mcp-cross-client:%'
       OR content LIKE '%mcp-cross-client-%'
       OR content LIKE '%mcp-fixture-%';

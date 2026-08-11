@@ -114,8 +114,30 @@ def main() -> None:
           out["a"]["score_inputs"]["utility_applied"] is False)
     check("utility applied above it",
           out["b"]["score_inputs"]["utility_applied"] is True)
-    check("a well-used memory outranks an identical unused one",
-          out["b"]["score"] > out["a"]["score"])
+    # The cold-start GATE is still the property under test above: below the
+    # threshold utility is not applied, above it it is. What a well-used memory
+    # then does to the ranking depends on the profile's weight, and as of
+    # migration 0045 that weight is 0.0 — so this asserts the gate's mechanics,
+    # not an ordering the project has decided against.
+    #
+    # It was measured, twice. eval/utility_ab.py over 180 golden cases: with the
+    # original saturating normalisation utility moved nothing (delta 0.0000
+    # everywhere); with the normalisation fixed so the signal could actually
+    # discriminate, it made things WORSE — recall@5 -0.0278, nDCG@10 -0.0087.
+    # Usage-derived utility is a closed loop while mem.feedback is empty: it
+    # rewards a memory for having been retrieved by this same ranker. §7.1 says a
+    # capability that misses its threshold ships disabled with the measurement
+    # recorded, so the weight is zero and the machinery is intact.
+    weight = float(weights.get("utility", 0.0))
+    if weight > 0:
+        check("a well-used memory outranks an identical unused one",
+              out["b"]["score"] > out["a"]["score"], f"weight={weight}")
+    else:
+        check("utility is weighted 0, so it changes no ordering (migration 0045)",
+              out["b"]["score"] == out["a"]["score"],
+              f"weight={weight}, scores {out['a']['score']} vs {out['b']['score']}")
+    check("...but the term is still computed, so it can be re-enabled on evidence",
+          "utility" in out["b"]["score_parts"])
 
     print("\n3b. MMR diversity and deduplication")
     mmr_ranked = [
