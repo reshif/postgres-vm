@@ -381,11 +381,19 @@ def write_memory(
     source_uri: str | None = None,
     source_version: str | None = None,
     metadata: dict[str, Any] | None = None,
+    lifecycle: str | None = None,
 ) -> dict[str, Any]:
     """Write one memory inside an already-scoped transaction.
 
     Idempotent on (tenant_id, content_hash): re-ingesting unchanged content
     returns the existing row instead of creating a duplicate.
+
+    ``lifecycle`` lets the SOURCE retire a document — an ADR whose frontmatter
+    says ``status: superseded`` is knowledge the project has explicitly withdrawn,
+    and retrieval filters on ``status = 'active'``. Without this the withdrawn
+    document keeps being served as current, which is the exact failure a memory
+    system exists to prevent. It can only retire a memory, never promote one:
+    quarantine is a safety decision and a source file does not get to clear it.
     """
     if len(content) > MAX_CONTENT:
         raise ValueError(
@@ -433,9 +441,27 @@ def write_memory(
                 {"d": fresh, "i": str(existing["id"])},
             )
             _refresh_digest_embedding(conn, tenant_id, existing["id"], fresh)
+
+        # Retiring a document usually reaches HERE, not the create path below.
+        # Ingest strips frontmatter before hashing, so editing `status: accepted`
+        # to `status: superseded` changes not one byte of content: the hash is
+        # unchanged, dedup matches, and handling lifecycle only on the create path
+        # would mean withdrawing a decision silently did nothing at all.
+        effective_status = existing["status"]
+        if (lifecycle and lifecycle != effective_status
+                and effective_status != "quarantined"):
+            conn.execute(
+                text("UPDATE mem.memories "
+                     "   SET status = CAST(:s AS mem.memory_status), "
+                     "       superseded_at = CASE WHEN :s = 'active' THEN NULL "
+                     "                            ELSE now() END "
+                     " WHERE id = :i"),
+                {"s": lifecycle, "i": str(existing["id"])},
+            )
+            effective_status = lifecycle
         return {
             "id": existing["id"], "created": False, "deduplicated": True,
-            "tier": existing["tier"], "status": existing["status"],
+            "tier": existing["tier"], "status": effective_status,
             "embedded": existing["embedded"], "superseded": None,
             "digest_refreshed": fresh != existing["digest"],
             # Same keys on every path. Adding a field to the create path only
@@ -458,6 +484,11 @@ def write_memory(
         tier = verdict["tier_cap"]
 
     status = "quarantined" if (tier in QUARANTINE_TIERS or verdict["quarantine"]) else "active"
+    # A source may retire its own document, but may not un-quarantine one: the
+    # quarantine decision above is a safety control and the file being ingested is
+    # exactly the thing it is protecting against.
+    if lifecycle and status != "quarantined":
+        status = lifecycle
     digest = make_digest(title, content)
 
     # Same key, different content: this is an EDIT, and under the bi-temporal

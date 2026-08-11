@@ -38,6 +38,7 @@ sys.path.insert(0, "/app/src")
 sys.path.insert(0, "/repo/eval")
 from memory_platform import context, db, evaluation, ingest, memories, ranking  # noqa: E402
 from memory_platform.config import settings  # noqa: E402
+import seed_negatives  # noqa: E402
 from cases import forbidden_labels, suite_one_coverage_issues, validate_golden  # noqa: E402
 
 # A dedicated tenant, and it must NOT be the one the scheduler's dev binding
@@ -148,6 +149,21 @@ def build_corpus() -> dict[str, str]:
                 c, tenant_id=TENANT, project_id=PROJECT, principal_id=PRINCIPAL,
                 mtype=seed["type"], title=seed["title"], content=seed["content"],
                 source_type=seed["source"], memory_key=f"planeb:{seed['key']}")
+
+        # The negative half of the corpus. forbidden@k has a gate of 0 and is an
+        # absolute count, so it measures containment: did anything that must
+        # never be served reach a pack. That question is unanswerable against a
+        # corpus containing nothing that must never be served, which is why the
+        # metric read 0 for every case before these existed.
+        #
+        # Seeded HERE rather than by a separate script so the fixtures are part of
+        # the corpus by construction, and so seed_into re-asserts on every run
+        # that each one is still contained. A negative label that has quietly
+        # become retrievable turns the gate red with no regression behind it.
+        negatives = seed_negatives.seed_into(c, TENANT, PROJECT, PRINCIPAL, quiet=True)
+        print(f"  negatives: {len(negatives)} contained fixtures "
+              f"(retired + untrusted) seeded for forbidden@k")
+
         rows = c.execute(text(
             "SELECT memory_key, content_hash FROM mem.memories "
             " WHERE tenant_id = :t AND upper(valid_at) IS NULL"),

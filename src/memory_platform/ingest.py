@@ -216,6 +216,27 @@ def classify(rel_path: Path) -> str | None:
     return None
 
 
+# Document lifecycle states, in the vocabulary Plane A authors actually write in
+# their frontmatter (`status:` on an ADR). These say the project has WITHDRAWN
+# the document, so it must stop being served as current knowledge.
+#
+# `proposed`/`draft` are deliberately absent: a proposal under discussion is a
+# legitimate answer to "what are we considering", and hiding it would make the
+# system unable to describe its own open questions.
+RETIRED_STATUSES = {"superseded", "deprecated", "rejected", "withdrawn", "obsolete"}
+
+
+def lifecycle_for(meta: dict[str, Any]) -> str | None:
+    """Map a document's own `status:` frontmatter onto a memory lifecycle.
+
+    Returning None means "the source has no opinion" and leaves the decision to
+    the trust and injection rules. Only retirement is expressed here — see
+    ``memories.write_memory`` for why a file cannot promote itself.
+    """
+    declared = str(meta.get("status", "")).strip().lower()
+    return "superseded" if declared in RETIRED_STATUSES else None
+
+
 def title_for(meta: dict[str, Any], body: str, rel: Path) -> str:
     if meta.get("title"):
         ident = meta.get("id")
@@ -299,6 +320,7 @@ def ingest_tree(
             source_type="git",            # -> authoritative (Plane A, reviewed)
             memory_key=key, source_uri=rel_str, source_version=sha,
             metadata={k: v for k, v in meta.items() if k != "title"},
+            lifecycle=lifecycle_for(meta),
         )
         # A glossary is the project's authored vocabulary, so it becomes graph
         # entities as well as a searchable memory.
