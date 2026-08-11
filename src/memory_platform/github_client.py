@@ -274,3 +274,56 @@ class GitHubAppClient:
             content=content, content_sha256=hashlib.sha256(raw).hexdigest(),
             byte_size=len(raw),
         )
+
+
+class GitHubPatClient(GitHubAppClient):
+    """Fine-grained PAT client for the same bounded immutable Git reads.
+
+    It intentionally implements the App client's read surface (including the
+    ignored ``installation_id`` argument) so the evidence pipeline keeps one
+    set of path, revision, file-count, and byte-size limits regardless of how
+    the project authenticated to GitHub.
+    """
+
+    def __init__(
+        self,
+        *,
+        token: str,
+        api_url: str = "https://api.github.com",
+        http: httpx.Client | None = None,
+    ) -> None:
+        token = token.strip()
+        if len(token) < 20:
+            raise GitHubApiError("GitHub PAT is too short")
+        self.token = token
+        self.api_url = api_url.rstrip("/")
+        self.http = http or httpx.Client(timeout=30.0)
+        self._owns_http = http is None
+
+    def installation_token(self, installation_id: int) -> str:
+        """Compatibility only; PAT calls never mint or cache another token."""
+        return self.token
+
+    def _get(self, path: str, *, installation_id: int | None = None) -> dict[str, Any]:
+        response = self.http.get(
+            f"{self.api_url}{path}",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self.token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        if response.status_code != 200:
+            raise GitHubApiError(f"GitHub API read failed ({response.status_code}) for {path}")
+        body = response.json()
+        if not isinstance(body, dict):
+            raise GitHubApiError(f"GitHub API returned a non-object for {path}")
+        return body
+
+    def validate_repository(self, repository_url: str) -> tuple[str | None, tuple[str, ...]]:
+        """Prove this credential can read the project's bound source repository."""
+        repository = repository_slug(repository_url)
+        self._get(f"/repos/{repository}")
+        user = self._get("/user")
+        login = user.get("login")
+        return (str(login) if isinstance(login, str) and login else None, ())

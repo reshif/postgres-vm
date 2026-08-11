@@ -20,6 +20,9 @@ dependencies = [
   # algorithms — without it PyJWT can only do HMAC, which would force the
   # shared-secret model this design specifically avoids.
   "pyjwt[crypto]>=2.9",
+  # The console encrypts project-scoped GitHub PATs before storage.  This is a
+  # direct dependency rather than relying on PyJWT's optional transitive extra.
+  "cryptography>=43",
   # Tracing. OTEL_EXPORTER_OTLP_ENDPOINT has been set in docker-compose since
   # the first commit and the collector, Tempo and Grafana have all been running
   # — but nothing was ever installed to emit a span, so the traces pipeline

@@ -17,9 +17,9 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from procrastinate import App, PsycopgConnector
 from sqlalchemy import text
 
-from . import db, evidence_assertions, github_evidence, ingest, maintenance
+from . import db, evidence_assertions, github_credentials, github_evidence, ingest, maintenance
 from .config import settings
-from .github_client import GitHubApiError, GitHubAppClient
+from .github_client import GitHubApiError, GitHubAppClient, GitHubPatClient
 
 logging.basicConfig(level=settings().log_level.upper())
 log = logging.getLogger("memory.worker")
@@ -147,6 +147,7 @@ def _github_service_scope(project_id: UUID) -> tuple[UUID, UUID, dict]:
 def _process_github_delivery(delivery_id: UUID, project_id: UUID) -> dict:
     """Synchronous core for a queued GitHub delivery, exercised by acceptance tests."""
     tenant_id, principal_id, project = _github_service_scope(project_id)
+    pat_token = None
     with db.scoped(tenant_id, principal_id, project_id, direct=True) as conn:
         delivery = github_evidence.get_delivery(conn, delivery_id=delivery_id)
         if delivery is None:
@@ -155,24 +156,40 @@ def _process_github_delivery(delivery_id: UUID, project_id: UUID) -> dict:
             raise PermissionError("queued GitHub delivery does not belong to the stated project")
         if delivery["status"] == "processed":
             return {"duplicate": True}
+        # The token is decrypted only in the worker immediately before the
+        # bounded exact-SHA reads. It is never attached to a task payload, log,
+        # audit row, or GitHub delivery record.
+        pat_token = github_credentials.load_pat(conn, project_id=project_id)
     sidecar_sync = None
     if delivery["repository_role"] == "evidence" and delivery["event_name"] == "push":
         if not delivery["revision"]:
             raise GitHubApiError("evidence repository push has no immutable commit SHA")
-        if (not project["repo_url"] or not project["evidence_repo_url"]
-                or not project["github_installation_id"]):
+        if not project["repo_url"] or not project["evidence_repo_url"]:
             raise GitHubApiError("GitHub-native project binding is incomplete")
         cfg = settings()
-        with GitHubAppClient(
-            app_id=cfg.github_app_id, private_key=cfg.github_private_key,
-            api_url=cfg.github_api_url) as client:
-            sidecar_sync = evidence_assertions.prepare_sidecar_sync(
-                client, source_repository=str(project["repo_url"]),
-                evidence_repository=str(project["evidence_repo_url"]),
-                revision=str(delivery["revision"]),
-                installation_id=int(project["github_installation_id"]),
-                max_blob_bytes=cfg.github_max_blob_bytes,
-                max_files=cfg.github_max_sync_files)
+        if pat_token:
+            client = GitHubPatClient(token=pat_token, api_url=cfg.github_api_url)
+            installation_id = 0  # Ignored by GitHubPatClient; keeps one read contract.
+        else:
+            if not project["github_installation_id"]:
+                raise GitHubApiError("GitHub-native project has no App installation or PAT")
+            client = GitHubAppClient(
+                app_id=cfg.github_app_id, private_key=cfg.github_private_key,
+                api_url=cfg.github_api_url)
+            installation_id = int(project["github_installation_id"])
+        try:
+            with client:
+                sidecar_sync = evidence_assertions.prepare_sidecar_sync(
+                    client, source_repository=str(project["repo_url"]),
+                    evidence_repository=str(project["evidence_repo_url"]),
+                    revision=str(delivery["revision"]), installation_id=installation_id,
+                    max_blob_bytes=cfg.github_max_blob_bytes,
+                    max_files=cfg.github_max_sync_files)
+        except GitHubApiError as exc:
+            if pat_token:
+                with db.scoped(tenant_id, principal_id, project_id, direct=True) as conn:
+                    github_credentials.record_use(conn, project_id=project_id, error=str(exc))
+            raise
     with db.scoped(tenant_id, principal_id, project_id, direct=True) as conn:
         artifact = github_evidence.record_event_artifact(conn, delivery=delivery)
         synced = None
@@ -183,6 +200,8 @@ def _process_github_delivery(delivery_id: UUID, project_id: UUID) -> dict:
                 evidence_revision=str(delivery["revision"]),
                 observed_at=delivery["occurred_at"], prepared=sidecar_sync,
                 accepted_by=principal_id)
+        if pat_token:
+            github_credentials.record_use(conn, project_id=project_id)
         github_evidence.update_delivery(conn, delivery_id=delivery_id, status="processed")
     return {"artifact": artifact, "event": delivery["event_name"],
             "revision": delivery["revision"], "sidecar": synced}

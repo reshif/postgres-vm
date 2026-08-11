@@ -59,6 +59,9 @@ app.include_router(routes_tasks.router)
 from . import routes_github  # noqa: E402
 app.include_router(routes_github.router)
 
+from . import routes_github_console  # noqa: E402
+app.include_router(routes_github_console.router)
+
 
 _UNSCOPED_API_PATHS = {
     "/v1/console/config",  # Bootstrap may exchange an optional bearer for a scope.

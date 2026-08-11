@@ -12,7 +12,9 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 sys.path.insert(0, "/app/src")
-from memory_platform.github_client import GitHubApiError, GitHubAppClient, repository_slug  # noqa: E402
+from memory_platform.github_client import (  # noqa: E402
+    GitHubApiError, GitHubAppClient, GitHubPatClient, repository_slug,
+)
 
 results: list[tuple[bool, str]] = []
 
@@ -98,7 +100,35 @@ def main() -> None:
           ["Bearer installation-token", "Bearer installation-token", "Bearer installation-token"],
           str(auth_headers))
 
-    print("\n3. Bounds and unsafe input")
+    print("\n3. Fine-grained PAT reads")
+    pat_calls: list[httpx.Request] = []
+
+    def pat_handler(request: httpx.Request) -> httpx.Response:
+        pat_calls.append(request)
+        if request.url.path == "/repos/example/service":
+            return httpx.Response(200, json={"full_name": "example/service"})
+        if request.url.path == "/user":
+            return httpx.Response(200, json={"login": "octo-user"})
+        if request.url.path == "/repos/example/service/git/trees/aaaaaaaa":
+            return httpx.Response(200, json={"tree": [
+                {"path": "assertions/storage.md", "type": "blob", "sha": "blob-a", "size": len(content)},
+            ], "truncated": False})
+        return httpx.Response(404, json={"message": "not found"})
+
+    pat_http = httpx.Client(transport=httpx.MockTransport(pat_handler))
+    pat = GitHubPatClient(token="github_pat_abcdefghijklmnopqrstuvwxyz", api_url="https://github.test", http=pat_http)
+    login, scopes = pat.validate_repository("https://github.com/example/service")
+    pat_blobs = pat.list_blobs(repository_url="https://github.com/example/service", revision="aaaaaaaa",
+                               installation_id=0, prefix="assertions", max_files=5)
+    check("PAT validation proves access to the bound repository", login == "octo-user" and scopes == ())
+    check("PAT client preserves the exact-SHA tree bounds", pat_blobs == [
+        {"path": "assertions/storage.md", "sha": "blob-a", "size": len(content)}])
+    check("PAT is sent only as an Authorization header", all(
+        request.headers.get("authorization") == "Bearer github_pat_abcdefghijklmnopqrstuvwxyz"
+        for request in pat_calls), str([request.headers.get("authorization") for request in pat_calls]))
+    pat.close()
+
+    print("\n4. Bounds and unsafe input")
     try:
         client.get_text_blob(
             repository_url="https://github.com/example/service", revision="aaaaaaaa",

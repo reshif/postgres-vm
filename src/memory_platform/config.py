@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     github_app_id: str = ""
     github_private_key: str = ""
     github_api_url: str = "https://api.github.com"
+    # Deployment-owned Fernet key for the Console's project-scoped PAT store.
+    # This is intentionally separate from the GitHub App private key and must
+    # be identical on every API/worker replica that may use a credential.
+    github_pat_encryption_key: str = ""
     github_evidence_suffix: str = "-evidence"
     github_webhook_max_bytes: int = 1_048_576
     github_max_blob_bytes: int = 262_144

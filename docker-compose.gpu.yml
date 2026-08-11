@@ -1,0 +1,88 @@
+# GPU overlay — apply on top of docker-compose.yml on a host with an NVIDIA GPU
+# and nvidia-container-toolkit installed:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml \
+#     --profile tei --profile rerank up -d --wait
+#
+# Also set in .env:
+#   MEMORY_RERANK_ENABLED=true
+#
+# What this changes and why:
+#
+# The CPU path (docker-compose.yml) moved embeddings to host Ollama and left the
+# cross-encoder reranker off by default, both purely because of CPU/memory
+# constraints documented in that file and in eval/RESULTS.md — not because TEI
+# or reranking are wrong. eval/RESULTS.md's own numbers: cross-encoder reranking
+# is the single largest quality lever measured (+0.089 recall@5, +0.147 MRR,
+# +0.128 nDCG@10 on one snapshot), enough on its own to close the MRR and nDCG
+# gates and land recall@5 within 0.006-0.020 of the 0.90 gate — but it was 5.9-6.3s
+# p95 on CPU against a <300ms gate, so it stayed off by default per ADR-0013.
+# The same doc names "a faster cross-encoder (GPU/hosted)" as the top remaining
+# lever. This overlay is that experiment: same models, same eval, GPU backend.
+#
+# image tag: :86-1.8 targets compute capability 8.6 (Ampere: RTX 30-series,
+# A100). Check `nvidia-smi --query-gpu=compute_cap --format=csv` on a different
+# card and swap to :turing-1.8 (7.5), :89-1.8 (Ada / RTX 40-series, L4), or
+# :hopper-1.8 (9.0) as needed.
+#
+# Deliberately NOT switching the reranker model to bge-reranker-v2-m3 here even
+# though the GPU removes the memory pressure that ruled it out on CPU — keeping
+# bge-reranker-base holds the model constant so this run isolates the hardware
+# variable against the existing CPU numbers in eval/RESULTS.md. Try v2-m3 as a
+# separate, later A/B once the GPU/base numbers are recorded.
+
+services:
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:86-1.8
+    command: ["--model-id", "BAAI/bge-m3", "--pooling", "cls", "--max-batch-tokens", "8192"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:86-1.8
+    command: ["--model-id", "BAAI/bge-reranker-base", "--max-batch-tokens", "8192"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Point the app at in-compose TEI instead of host Ollama now that embeddings
+  # run in-cluster on GPU. See the comment on x-common-env in docker-compose.yml.
+  init:
+    environment:
+      MEMORY_EMBEDDING_PROVIDER: local
+      MEMORY_EMBEDDING_URL: http://embeddings:80
+
+  api:
+    environment:
+      MEMORY_EMBEDDING_PROVIDER: local
+      MEMORY_EMBEDDING_URL: http://embeddings:80
+    depends_on:
+      embeddings: { condition: service_started }
+
+  mcp:
+    environment:
+      MEMORY_EMBEDDING_PROVIDER: local
+      MEMORY_EMBEDDING_URL: http://embeddings:80
+
+  worker:
+    environment:
+      MEMORY_EMBEDDING_PROVIDER: local
+      MEMORY_EMBEDDING_URL: http://embeddings:80
+    depends_on:
+      embeddings: { condition: service_started }
+
+  scheduler:
+    environment:
+      MEMORY_EMBEDDING_PROVIDER: local
+      MEMORY_EMBEDDING_URL: http://embeddings:80
+    depends_on:
+      embeddings: { condition: service_started }
