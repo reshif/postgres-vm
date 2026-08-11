@@ -399,3 +399,89 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# ---------------------------------------------------------------------------
+# MCP Tasks extension handlers.
+#
+# One task per long operation, each advancing the handle the client is polling.
+# The handle is updated in a SEPARATE transaction from the work: if the work
+# fails, the failure has to reach the client, and a status write inside the
+# aborted transaction would roll back with it and leave the task at `working`
+# forever — the one state a poll loop cannot recover from.
+# ---------------------------------------------------------------------------
+
+def _finish_task(task_id: str, tenant_id: str, project_id: str, *,
+                 status: str, result: dict | None = None,
+                 error: str | None = None) -> None:
+    from . import mcp_tasks as _tasks
+
+    with db.scoped(UUID(tenant_id), UUID(tenant_id), UUID(project_id),
+                   direct=True) as conn:
+        _tasks.finish(conn, task_id=UUID(task_id), status=status,
+                      result=result, error=error)
+
+
+def _run_mcp_task(kind: str, task_id: str, tenant_id: str, project_id: str,
+                  arguments: dict) -> dict:
+    tenant, project = UUID(tenant_id), UUID(project_id)
+    if kind == "ingest":
+        from pathlib import Path
+
+        from . import ingest as _ingest
+        root = Path(arguments.get("repo_path") or settings().ingest_repo_path)
+        with db.scoped(tenant, tenant, project, direct=True) as conn:
+            return _ingest.ingest_tree(conn, root, tenant_id=tenant,
+                                       project_id=project).summary()
+    if kind == "reembed":
+        with db.scoped(tenant, tenant, project, direct=True) as conn:
+            return maintenance.backfill_embeddings(conn, tenant_id=tenant,
+                                                   project_id=project)
+    if kind == "consolidate":
+        from . import consolidation as _consolidation
+        with db.scoped(tenant, tenant, project, direct=True) as conn:
+            return {
+                "dedup": _consolidation.dedup(conn, tenant_id=tenant,
+                                              project_id=project),
+                "compaction": _consolidation.compact_episodes(
+                    conn, tenant_id=tenant, project_id=project),
+            }
+    if kind == "evaluate":
+        # Deliberately not "run the whole eval harness from a tool call". Suite 1
+        # takes tens of minutes and pins a corpus snapshot; what a caller can ask
+        # for here is the current recorded state, not a fresh benchmark run.
+        from sqlalchemy import text as _text
+        with db.scoped(tenant, tenant, project, direct=True) as conn:
+            row = conn.execute(_text(
+                "SELECT suite, status, metrics, completed_at "
+                "  FROM mem.evaluation_runs "
+                " WHERE tenant_id = :t AND project_id = :p "
+                " ORDER BY created_at DESC LIMIT 1"),
+                {"t": str(tenant), "p": str(project)}).mappings().one_or_none()
+        return {"latest_run": dict(row) if row else None,
+                "note": "reports the last recorded evaluation; run eval/run_eval.py "
+                        "to produce a new one"}
+    raise ValueError(f"unknown task kind: {kind}")
+
+
+def _register_mcp_task(kind: str) -> None:
+    @app.task(queue="ingestion", name=f"mcp_task_{kind}")
+    async def _handler(task_id: str, tenant_id: str, project_id: str,
+                       arguments: dict | None = None) -> None:
+        try:
+            result = await asyncio.to_thread(
+                _run_mcp_task, kind, task_id, tenant_id, project_id,
+                arguments or {})
+        except Exception as exc:  # noqa: BLE001
+            log.exception("mcp task %s (%s) failed", task_id, kind)
+            await asyncio.to_thread(
+                _finish_task, task_id, tenant_id, project_id,
+                status="failed", error=str(exc)[:2000])
+            return
+        await asyncio.to_thread(
+            _finish_task, task_id, tenant_id, project_id,
+            status="completed", result=result)
+
+
+for _kind in ("ingest", "reembed", "consolidate", "evaluate"):
+    _register_mcp_task(_kind)

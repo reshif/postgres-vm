@@ -26,6 +26,8 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from . import mrtr
+
 API_URL = os.environ.get("MEMORY_API_URL", "http://api:8080").rstrip("/")
 
 # SCOPE BINDING — LOCAL DEVELOPMENT ONLY.
@@ -49,6 +51,10 @@ OAUTH_ISSUER = os.environ.get("MCP_OAUTH_ISSUER", "")
 PROTOCOL_VERSION = os.environ.get("MCP_PROTOCOL_VERSION", "2026-07-28")
 SUPPORTED = [PROTOCOL_VERSION]
 SERVER_INFO = {"name": "io.acme/memory", "version": "0.1.0"}
+
+# The operations whose duration is unbounded from the caller's point of view.
+# memory.context is absent on purpose: it carries a 350 ms gate.
+TASK_KINDS = ("ingest", "reembed", "consolidate", "evaluate")
 
 # Published MCP revisions whose initialize/tools wire format this server speaks.
 # The module docstring's "no initialize handshake" describes the STATELESS intent
@@ -228,6 +234,34 @@ def _resolve_scope(request: Request) -> dict:
         return r.json()
 
 
+def _otel_context(meta: dict[str, Any]):
+    """Continue the caller's trace from `_meta`.
+
+    02-MCP-CONTRACT.md: "OTel context read from `_meta` (traceparent, tracestate,
+    baggage) and propagated into your spans."
+
+    Without this the gateway starts a fresh trace per call, so the agent's turn
+    and the SQL it ultimately causes are two unrelated traces and the one
+    question worth asking of a distributed trace — where did this request spend
+    its time, end to end — cannot be asked at all.
+
+    The keys arrive in `_meta` rather than in HTTP headers, so the auto-
+    instrumentation does not see them: MCP moved trace context into the protocol
+    envelope precisely because a call may not have been an HTTP request.
+    """
+    carrier = {k: v for k, v in (meta or {}).items()
+               if k in ("traceparent", "tracestate", "baggage")
+               and isinstance(v, str)}
+    if not carrier:
+        return None
+    try:
+        from opentelemetry.propagate import extract
+
+        return extract(carrier)
+    except Exception:  # noqa: BLE001 - tracing must never break a tool call
+        return None
+
+
 @app.post("/mcp")
 async def mcp(request: Request) -> Response:
     body = await request.json()
@@ -235,6 +269,25 @@ async def mcp(request: Request) -> Response:
     method = body.get("method")
     params = body.get("params") or {}
     meta = params.get("_meta", {}) or body.get("_meta", {}) or {}
+
+    parent = _otel_context(meta)
+    if parent is not None:
+        from . import telemetry as _telemetry
+
+        with _telemetry.tracer("memory.mcp").start_as_current_span(
+                f"mcp/{method}", context=parent) as span:
+            try:
+                span.set_attribute("mcp.method", str(method))
+                if method == "tools/call":
+                    span.set_attribute("mcp.tool", str(params.get("name")))
+            except Exception:  # noqa: BLE001
+                pass
+            return await _handle(request, body, rid, method, params, meta)
+    return await _handle(request, body, rid, method, params, meta)
+
+
+async def _handle(request: Request, body: dict, rid: Any, method: Any,
+                  params: dict, meta: dict) -> Response:
 
     # JSON-RPC notifications carry no id and MUST NOT be answered with a result.
     # `notifications/initialized` is the client's third handshake frame; replying
@@ -260,6 +313,16 @@ async def mcp(request: Request) -> Response:
             "capabilities": {
                 "tools": {"listChanged": False},
                 "resources": {"subscribe": False, "listChanged": False},
+                # Declared, not implied. A client that cannot see the extension
+                # in capabilities has no reason to call tasks/create, and the
+                # long operations stay unreachable through the protocol.
+                "experimental": {
+                    "io.modelcontextprotocol/tasks": {
+                        "kinds": list(TASK_KINDS),
+                        "poll": True,
+                        "input": True,
+                    },
+                },
             },
             "serverInfo": SERVER_INFO,
         })
@@ -274,7 +337,8 @@ async def mcp(request: Request) -> Response:
             "capabilities": {
                 "tools": {},
                 "resources": {"subscribe": False, "listChanged": False},
-                "extensions": {},
+                "extensions": {"io.modelcontextprotocol/tasks": {
+                    "kinds": list(TASK_KINDS)}},
             },
             **CACHE,
         })
@@ -337,9 +401,26 @@ async def mcp(request: Request) -> Response:
         except _auth.Forbidden as exc:
             return _error(rid, -32003, f"forbidden: {exc}")
 
+        args = params.get("arguments") or {}
+
+        # MRTR. Actions whose effect is on TRUST rather than on data stop here
+        # and ask, once, before they happen — retraction, supersession, and
+        # anything entering the authoritative plane. The result is a QUESTION,
+        # not an error: an error tells the agent it did something wrong and
+        # invites a retry with different arguments, which is the opposite of
+        # what should happen next.
+        reason = mrtr.requires_confirmation(name, args)
+        if reason:
+            ok, why = mrtr.verify(name, args, params.get("requestState"),
+                                  params.get("inputResponses"))
+            if not ok:
+                issued = mrtr.issue(name, args, reason)
+                issued["_declined"] = why
+                return _result(rid, issued)
+
         try:
             return _result(rid, _dispatch(
-                name, params.get("arguments") or {}, scope,
+                name, args, scope,
                 request.headers.get("authorization"),
             ))
         except httpx.HTTPStatusError as exc:
@@ -348,7 +429,70 @@ async def mcp(request: Request) -> Response:
         except httpx.HTTPError as exc:
             return _error(rid, -32004, f"context api unreachable: {exc}")
 
+    # ----------------------------------------------- io.modelcontextprotocol/tasks
+    # Long operations return a handle immediately instead of holding the call
+    # open. `memory.context` is deliberately NOT among them: it has a 350 ms
+    # production gate, and putting a hot path behind a poll loop converts a
+    # latency budget into a client-side retry loop.
+    if method in {"tasks/create", "tasks/get", "tasks/update", "tasks/cancel",
+                  "tasks/list"}:
+        from . import auth as _auth
+        try:
+            scope = _resolve_scope(request)
+        except _auth.AuthError as exc:
+            return _error(rid, -32002, f"unauthorized: {exc}")
+        except _auth.Forbidden as exc:
+            return _error(rid, -32003, f"forbidden: {exc}")
+        try:
+            return _result(rid, _tasks_dispatch(
+                method, params, scope, request.headers.get("authorization")))
+        except LookupError as exc:
+            return _error(rid, -32602, str(exc))
+        except ValueError as exc:
+            return _error(rid, -32602, str(exc))
+        except httpx.HTTPError as exc:
+            return _error(rid, -32004, f"context api unreachable: {exc}")
+
     return _error(rid, -32601, f"method not found: {method}")
+
+
+def _tasks_dispatch(method: str, params: dict, scope: dict,
+                    authorization: str | None) -> dict:
+    """Serve the Tasks extension through the API, which owns the database.
+
+    The gateway holds no database credentials — the same boundary the tool path
+    respects. A task handle is state, and state lives behind the API.
+    """
+    headers = {"Authorization": authorization} if authorization else {}
+    with httpx.Client(base_url=API_URL, timeout=30.0, headers=headers) as c:
+        if method == "tasks/create":
+            kind = params.get("kind")
+            if kind not in ("ingest", "reembed", "consolidate", "evaluate"):
+                raise ValueError(
+                    f"tasks/create needs a kind in ingest|reembed|consolidate|"
+                    f"evaluate, got {kind!r}")
+            r = c.post("/v1/tasks", json={**scope, "kind": kind,
+                                          "arguments": params.get("arguments") or {}})
+        elif method == "tasks/list":
+            r = c.get("/v1/tasks", params={**scope})
+        else:
+            task_id = params.get("taskId")
+            if not task_id:
+                raise ValueError(f"{method} requires a taskId")
+            if method == "tasks/get":
+                r = c.get(f"/v1/tasks/{task_id}", params={**scope})
+            elif method == "tasks/cancel":
+                r = c.post(f"/v1/tasks/{task_id}/cancel", json={**scope})
+            else:  # tasks/update — the client answering an inputRequest
+                r = c.post(f"/v1/tasks/{task_id}/update", json={
+                    **scope,
+                    "requestState": params.get("requestState"),
+                    "inputResponses": params.get("inputResponses") or {},
+                })
+        if r.status_code == 404:
+            raise LookupError(f"no such task: {params.get('taskId')}")
+        r.raise_for_status()
+        return r.json()
 
 
 SCOPE = lambda: {"tenant_id": DEV_TENANT, "project_id": DEV_PROJECT,

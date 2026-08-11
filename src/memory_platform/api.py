@@ -51,6 +51,9 @@ metrics.set_rerank_enabled(settings().rerank_enabled)
 from . import routes_graph  # noqa: E402
 app.include_router(routes_graph.router)
 
+from . import routes_tasks  # noqa: E402
+app.include_router(routes_tasks.router)
+
 
 _UNSCOPED_API_PATHS = {
     "/v1/console/config",  # Bootstrap may exchange an optional bearer for a scope.
