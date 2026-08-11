@@ -203,6 +203,7 @@ def capture_tool_result(
     exit_code: int,
     command: str = "",
     output_excerpt: str = "",
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Record a tool invocation outcome (05-BUILD-PLAN: "tool exit codes")."""
     ok = exit_code == 0
@@ -224,6 +225,12 @@ def capture_tool_result(
         # observation. Only a pipeline this project controls earns `verified`.
         source_type="tool",
         memory_key=f"tool:{tool}:{signature}:{abs(hash(command)) % 10**8}",
+        # `command` and `session_id` are recorded as structured fields, not left
+        # to be re-parsed out of the body. Procedure distillation groups
+        # successes into "a consistent action sequence" (§6.5), and a sequence
+        # can only be reconstructed if the ORDER and the GROUPING are recorded at
+        # capture time — recovering them later from prose is guesswork.
         metadata={"capture": "tool", "tool": tool, "exit_code": exit_code,
-                  "signature": signature},
+                  "signature": signature, "command": command,
+                  **({"session_id": session_id} if session_id else {})},
     )

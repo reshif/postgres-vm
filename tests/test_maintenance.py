@@ -224,7 +224,10 @@ def main() -> None:
                        # unretrieved episodes first, so consolidation does not
                        # spend similarity probes on rows already leaving
                        # retrieval.
-                       "dedup", "compaction"},
+                       "dedup", "compaction",
+                       # Distillation rides in the same sweep but its output is a
+                       # pull request against Plane A, never a row.
+                       "distillation"},
           str(sorted(out)))
     check("the partition window is maintained", "created" in out.get("partitions", {}),
           str(out.get("partitions")))

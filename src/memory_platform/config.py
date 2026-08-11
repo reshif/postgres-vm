@@ -106,6 +106,17 @@ class Settings(BaseSettings):
     # on a large project would hold a transaction open for a very long time.
     consolidation_batch_size: int = 2000
 
+    # Procedure distillation (§6.5 item 3). Its output is a PULL REQUEST, never a
+    # memory row — see distillation.py for why that is structural rather than a
+    # convention. Default 4 successful runs, as the blueprint specifies.
+    distillation_enabled: bool = True
+    distillation_min_episodes: int = 4
+    distillation_branch_prefix: str = "memory/procedure-"
+    # Where the reviewable patch is written when no remote accepts the branch.
+    # Inside the container by default; mount it to keep proposals across restarts.
+    distillation_output_dir: str = "/tmp/memory-distillation"
+    distillation_remote: str = "origin"
+
     role: str = "api"
     log_level: str = "info"
     worker_queues: str = "embedding,ingestion,extraction"

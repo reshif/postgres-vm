@@ -264,6 +264,15 @@ def _consolidation_step(name: str, conn: Connection, tenant_id: UUID,
                                          project_id=project_id)
 
 
+def _distillation_step(conn: Connection, tenant_id: UUID,
+                       project_id: UUID) -> dict[str, Any]:
+    if not settings().distillation_enabled:
+        return {"skipped": "distillation_enabled is false"}
+    from . import distillation as _distillation
+
+    return _distillation.distill(conn, tenant_id=tenant_id, project_id=project_id)
+
+
 def run_all(conn: Connection, *, tenant_id: UUID, project_id: UUID) -> dict[str, Any]:
     """One maintenance pass. Each step is independent: a failure in one must not
     stop the others, because the sweep runs unattended and a decay bug should not
@@ -287,6 +296,10 @@ def run_all(conn: Connection, *, tenant_id: UUID, project_id: UUID) -> dict[str,
         ("dedup", lambda: _consolidation_step("dedup", conn, tenant_id, project_id)),
         ("compaction", lambda: _consolidation_step("compact_episodes", conn,
                                                    tenant_id, project_id)),
+        # Distillation is listed with the consolidation passes but is NOT one of
+        # them in the way that matters: its output is a pull request against
+        # Plane A, never a row. See distillation.py.
+        ("distillation", lambda: _distillation_step(conn, tenant_id, project_id)),
     ):
         try:
             out[name] = fn()

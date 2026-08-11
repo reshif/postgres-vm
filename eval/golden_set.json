@@ -1021,6 +1021,1641 @@
      "hash": "e05f9ec7b4bb"
     }
    ]
+  },
+  {
+   "id": "g56",
+   "query": "at what scale would we reconsider a separate store?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g57",
+   "query": "how many memories before Postgres stops being enough?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g58",
+   "query": "is code search indexed in the same database?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g59",
+   "query": "do graph-shaped entities need their own database?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g60",
+   "query": "what has to be true before we add a second datastore?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 3
+    },
+    {
+     "key": ".memory:project.yaml",
+     "hash": "fc938b0576f5",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g61",
+   "query": "why keep retrieval telemetry in the same store as the memories?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g62",
+   "query": "what belongs in the .memory directory versus in Postgres?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0002.md",
+     "hash": "f3cf782f4aad",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g63",
+   "query": "how does an agent propose a change to authoritative knowledge?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0002.md",
+     "hash": "f3cf782f4aad",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g64",
+   "query": "what is Plane B?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0002.md",
+     "hash": "f3cf782f4aad",
+     "grade": 3
+    },
+    {
+     "key": ".memory:glossary.md",
+     "hash": "45d201942ded",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g65",
+   "query": "which plane is versioned by git?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0002.md",
+     "hash": "f3cf782f4aad",
+     "grade": 3
+    },
+    {
+     "key": ".memory:glossary.md",
+     "hash": "45d201942ded",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g66",
+   "query": "are episodes and observations reviewed by a human before storage?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0002.md",
+     "hash": "f3cf782f4aad",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0005.md",
+     "hash": "7fa21f621525",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g67",
+   "query": "who writes Plane B, people or system processes?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0002.md",
+     "hash": "f3cf782f4aad",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g68",
+   "query": "what does memory.explain give me?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0003.md",
+     "hash": "b4e57d70644e",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g69",
+   "query": "how do I see why a memory was ranked where it was?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0003.md",
+     "hash": "b4e57d70644e",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0009.md",
+     "hash": "293a5f4611a9",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g70",
+   "query": "which tool do I call to record something durable?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0003.md",
+     "hash": "b4e57d70644e",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g71",
+   "query": "what are MCP resource URIs used for here?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0003.md",
+     "hash": "b4e57d70644e",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g72",
+   "query": "MCP exposes intent, not implementation",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0003.md",
+     "hash": "b4e57d70644e",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g73",
+   "query": "what is the difference between memory.context and memory.search?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0003.md",
+     "hash": "b4e57d70644e",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g74",
+   "query": "does tool count have a cost for agents?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0003.md",
+     "hash": "b4e57d70644e",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g75",
+   "query": "how does the server work out who is calling?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0004.md",
+     "hash": "10b558e50378",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g76",
+   "query": "what is a pack_id?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0004.md",
+     "hash": "10b558e50378",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0003.md",
+     "hash": "b4e57d70644e",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g77",
+   "query": "is the system allowed to keep any state at all?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0004.md",
+     "hash": "10b558e50378",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g78",
+   "query": "where must long-running operation state be stored?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0004.md",
+     "hash": "10b558e50378",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g79",
+   "query": "can a handle be implied by the connection?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0004.md",
+     "hash": "10b558e50378",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g80",
+   "query": "what does it mean that state must be attributable?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0004.md",
+     "hash": "10b558e50378",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g81",
+   "query": "does a high extractor confidence make something trusted?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0005.md",
+     "hash": "7fa21f621525",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g82",
+   "query": "what are the five trust tiers in order?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0005.md",
+     "hash": "7fa21f621525",
+     "grade": 3
+    },
+    {
+     "key": ".memory:glossary.md",
+     "hash": "45d201942ded",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g83",
+   "query": "what makes a memory authoritative?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0005.md",
+     "hash": "7fa21f621525",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g84",
+   "query": "confidence != trust",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0005.md",
+     "hash": "7fa21f621525",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g85",
+   "query": "can a candidate be presented as knowledge?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0005.md",
+     "hash": "7fa21f621525",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g86",
+   "query": "does a CI pass count as verification?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0005.md",
+     "hash": "7fa21f621525",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g87",
+   "query": "is transaction time ever updated in place?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0006.md",
+     "hash": "0f2c5adc4df8",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g88",
+   "query": "what are the four temporal invariants for v1?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0006.md",
+     "hash": "0f2c5adc4df8",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g89",
+   "query": "is supersession inferred from ordering or recorded explicitly?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0006.md",
+     "hash": "0f2c5adc4df8",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g90",
+   "query": "can we reconstruct what a memory said last month?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0006.md",
+     "hash": "0f2c5adc4df8",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g91",
+   "query": "is interval algebra in scope for the first version?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0006.md",
+     "hash": "0f2c5adc4df8",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g92",
+   "query": "what happens if Postgres 18 is not available for the temporal constraint?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0006.md",
+     "hash": "0f2c5adc4df8",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g93",
+   "query": "why SET LOCAL rather than a plain SET?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 3
+    },
+    {
+     "key": ".memory:conventions.md",
+     "hash": "a432662e4992",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g94",
+   "query": "should the application role own the tables?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g95",
+   "query": "are the isolation tests a merge gate?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 3
+    },
+    {
+     "key": ".memory:procedures/run-tests-and-eval.md",
+     "hash": "e00e688bb098",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g96",
+   "query": "why do composite indexes start with tenant_id?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g97",
+   "query": "can a client set app.* settings itself?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g98",
+   "query": "what is the measured overhead of row level security here?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g99",
+   "query": "why is post-hoc filtering of index results wrong?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g100",
+   "query": "NOBYPASSRLS",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 3
+    },
+    {
+     "key": ".memory:conventions.md",
+     "hash": "a432662e4992",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g101",
+   "query": "what k value does reciprocal rank fusion use?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0008.md",
+     "hash": "1076b96b346a",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g102",
+   "query": "do we use BM25 for the lexical arm?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0008.md",
+     "hash": "1076b96b346a",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g103",
+   "query": "why do we need trigram search at all?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0008.md",
+     "hash": "1076b96b346a",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g104",
+   "query": "which retrieval arms exist?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0008.md",
+     "hash": "1076b96b346a",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g105",
+   "query": "how are exact file paths and symbols matched?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0008.md",
+     "hash": "1076b96b346a",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g106",
+   "query": "ts_rank_cd weighting title digest content",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0008.md",
+     "hash": "1076b96b346a",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g107",
+   "query": "why halfvec instead of vector?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0008.md",
+     "hash": "1076b96b346a",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g108",
+   "query": "is there a recency arm?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0008.md",
+     "hash": "1076b96b346a",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g109",
+   "query": "how many retrievals before learned utility affects ranking?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0009.md",
+     "hash": "293a5f4611a9",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g110",
+   "query": "is an LLM the authority on which memories matter?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0009.md",
+     "hash": "293a5f4611a9",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g111",
+   "query": "what is the difference between utility and trust?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0009.md",
+     "hash": "293a5f4611a9",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0005.md",
+     "hash": "7fa21f621525",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g112",
+   "query": "what goes into the deterministic importance prior?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0009.md",
+     "hash": "293a5f4611a9",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g113",
+   "query": "are the prior and the learned signal separately inspectable?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0009.md",
+     "hash": "293a5f4611a9",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g114",
+   "query": "what does Procrastinate rely on underneath?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0010.md",
+     "hash": "0c20a9f0bd87",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g115",
+   "query": "FOR UPDATE SKIP LOCKED",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0010.md",
+     "hash": "0c20a9f0bd87",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g116",
+   "query": "why is queue state in the same database as the data?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0010.md",
+     "hash": "0c20a9f0bd87",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g117",
+   "query": "can a memory write and its background job share a transaction?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0010.md",
+     "hash": "0c20a9f0bd87",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g118",
+   "query": "is intermediate tool output stored as memory?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0011.md",
+     "hash": "79d290f60456",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g119",
+   "query": "what counts as durable knowledge rather than ephemeral cognition?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0011.md",
+     "hash": "79d290f60456",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g120",
+   "query": "who owns the agent's current plan?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0011.md",
+     "hash": "79d290f60456",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g121",
+   "query": "is a current hypothesis something we persist?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0011.md",
+     "hash": "79d290f60456",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g122",
+   "query": "how are project specifics stripped before sharing?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0012.md",
+     "hash": "7e5d3c53e084",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g123",
+   "query": "what happens to restricted memories during generalisation?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0012.md",
+     "hash": "7e5d3c53e084",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g124",
+   "query": "which project is dogfooded first?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0012.md",
+     "hash": "7e5d3c53e084",
+     "grade": 3
+    },
+    {
+     "key": ".memory:project.yaml",
+     "hash": "fc938b0576f5",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g125",
+   "query": "do raw memories ever cross a project boundary?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0012.md",
+     "hash": "7e5d3c53e084",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g126",
+   "query": "is human approval required before knowledge is shared across projects?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0012.md",
+     "hash": "7e5d3c53e084",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g127",
+   "query": "can two embedding models be active at the same time?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0013.md",
+     "hash": "3bcc4a176985",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g128",
+   "query": "are remote model providers architecture or configuration?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0013.md",
+     "hash": "3bcc4a176985",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g129",
+   "query": "how do we attribute a quality change to a model change?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0013.md",
+     "hash": "3bcc4a176985",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g130",
+   "query": "how are embeddings keyed by model identity?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0013.md",
+     "hash": "3bcc4a176985",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g131",
+   "query": "what are the evaluation arms?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0014.md",
+     "hash": "da94dc32a5c4",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g132",
+   "query": "what is arm B in the eval?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0014.md",
+     "hash": "da94dc32a5c4",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g133",
+   "query": "is memory versus a cold agent a fair headline claim?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0014.md",
+     "hash": "da94dc32a5c4",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g134",
+   "query": "does the baseline run once or every time?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0014.md",
+     "hash": "da94dc32a5c4",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g135",
+   "query": "what is capability-scoped advantage?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0014.md",
+     "hash": "da94dc32a5c4",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g136",
+   "query": "what is the kill criterion if the system does not beat the baseline?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0014.md",
+     "hash": "da94dc32a5c4",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g137",
+   "query": "what is the weekly time cap for curation?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0015.md",
+     "hash": "51ed4a4d63d1",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g138",
+   "query": "at what inbox depth do we raise an alert?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0015.md",
+     "hash": "51ed4a4d63d1",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g139",
+   "query": "when does auto-extraction get switched off?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0015.md",
+     "hash": "51ed4a4d63d1",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g140",
+   "query": "what inbox depth are we targeting per project?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0015.md",
+     "hash": "51ed4a4d63d1",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g141",
+   "query": "what happens if the 30 minute cap is exceeded four weeks running?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0015.md",
+     "hash": "51ed4a4d63d1",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g142",
+   "query": "do Plane A and Plane B reviews go through the same queue?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0015.md",
+     "hash": "51ed4a4d63d1",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0002.md",
+     "hash": "f3cf782f4aad",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g143",
+   "query": "do we poll for repository changes or use webhooks?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0016.md",
+     "hash": "a1e4add18a62",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g144",
+   "query": "why does reconciliation live in the scheduler and not the worker?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0016.md",
+     "hash": "a1e4add18a62",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g145",
+   "query": "is it safe if both the poller and the webhook fire for one commit?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0016.md",
+     "hash": "a1e4add18a62",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g146",
+   "query": "how quickly is a merged decision retrievable?",
+   "expect": [
+    {
+     "key": ".memory:decisions/ADR-0016.md",
+     "hash": "a1e4add18a62",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g147",
+   "query": "how much memory does the WSL2 VM need?",
+   "expect": [
+    {
+     "key": ".memory:procedures/run-the-local-stack.md",
+     "hash": "06e5420ce835",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g148",
+   "query": "what do I run before the first start to set up the pooler userlist?",
+   "expect": [
+    {
+     "key": ".memory:procedures/run-the-local-stack.md",
+     "hash": "06e5420ce835",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g149",
+   "query": "init exited 0, is that a failure?",
+   "expect": [
+    {
+     "key": ".memory:procedures/run-the-local-stack.md",
+     "hash": "06e5420ce835",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g150",
+   "query": "SHOW POOLS cl_active is zero",
+   "expect": [
+    {
+     "key": ".memory:procedures/run-the-local-stack.md",
+     "hash": "06e5420ce835",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g151",
+   "query": "which embedding model do I need to pull?",
+   "expect": [
+    {
+     "key": ".memory:procedures/run-the-local-stack.md",
+     "hash": "06e5420ce835",
+     "grade": 3
+    },
+    {
+     "key": "planeb:switch-embeddings-to-ollama",
+     "hash": "2b1e9575e6b3",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g152",
+   "query": "how do I confirm a migration actually applied?",
+   "expect": [
+    {
+     "key": ".memory:procedures/add-a-migration.md",
+     "hash": "bee6dbb9ee86",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g153",
+   "query": "down_revision pointing at the current head",
+   "expect": [
+    {
+     "key": ".memory:procedures/add-a-migration.md",
+     "hash": "bee6dbb9ee86",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g154",
+   "query": "can I edit a ranking profile in place?",
+   "expect": [
+    {
+     "key": ".memory:procedures/add-a-migration.md",
+     "hash": "bee6dbb9ee86",
+     "grade": 3
+    },
+    {
+     "key": ".memory:procedures/run-tests-and-eval.md",
+     "hash": "e00e688bb098",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g155",
+   "query": "do I need to drop an old SQL function overload?",
+   "expect": [
+    {
+     "key": ".memory:procedures/add-a-migration.md",
+     "hash": "bee6dbb9ee86",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g156",
+   "query": "a new tenant-scoped table needs what in the same migration?",
+   "expect": [
+    {
+     "key": ".memory:procedures/add-a-migration.md",
+     "hash": "bee6dbb9ee86",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g157",
+   "query": "which test suite runs first and why?",
+   "expect": [
+    {
+     "key": ".memory:procedures/run-tests-and-eval.md",
+     "hash": "e00e688bb098",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g158",
+   "query": "can I tune ranking weights until the eval passes?",
+   "expect": [
+    {
+     "key": ".memory:procedures/run-tests-and-eval.md",
+     "hash": "e00e688bb098",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g159",
+   "query": "how do I run the retrieval eval?",
+   "expect": [
+    {
+     "key": ".memory:procedures/run-tests-and-eval.md",
+     "hash": "e00e688bb098",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g160",
+   "query": "what does test_write_path cover?",
+   "expect": [
+    {
+     "key": ".memory:procedures/run-tests-and-eval.md",
+     "hash": "e00e688bb098",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g161",
+   "query": "how do I check whether Ollama has the model loaded?",
+   "expect": [
+    {
+     "key": ".memory:procedures/troubleshoot-the-embedder.md",
+     "hash": "a53b4f0d1c61",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g162",
+   "query": "docker events filter event=die",
+   "expect": [
+    {
+     "key": ".memory:procedures/troubleshoot-the-embedder.md",
+     "hash": "a53b4f0d1c61",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g163",
+   "query": "max-batch-tokens auto-truncate max_input_length",
+   "expect": [
+    {
+     "key": ".memory:procedures/troubleshoot-the-embedder.md",
+     "hash": "a53b4f0d1c61",
+     "grade": 3
+    },
+    {
+     "key": "planeb:embedder-oom-warmup",
+     "hash": "f088b1dde7b6",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g164",
+   "query": "readiness says embeddings degraded, is that an outage?",
+   "expect": [
+    {
+     "key": ".memory:procedures/troubleshoot-the-embedder.md",
+     "hash": "a53b4f0d1c61",
+     "grade": 3
+    },
+    {
+     "key": ".memory:procedures/run-the-local-stack.md",
+     "hash": "06e5420ce835",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g165",
+   "query": "how long does a clean checkout take to boot?",
+   "expect": [
+    {
+     "key": "planeb:cold-boot-green",
+     "hash": "dca93d0e8b63",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g166",
+   "query": "why were MCP tool names rejected by the client?",
+   "expect": [
+    {
+     "key": "planeb:mcp-tool-names-dots",
+     "hash": "176cd71ca32e",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g167",
+   "query": "tool names with dots failed validation",
+   "expect": [
+    {
+     "key": "planeb:mcp-tool-names-dots",
+     "hash": "176cd71ca32e",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g168",
+   "query": "why did we pin the pgbouncer image tag?",
+   "expect": [
+    {
+     "key": "planeb:pin-pgbouncer-tag",
+     "hash": "a39b32c5358f",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g169",
+   "query": "unrecognized configuration parameter",
+   "expect": [
+    {
+     "key": "planeb:postgres-c-equals-arg",
+     "hash": "0f410dbe770e",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g170",
+   "query": "server login failed wrong password type",
+   "expect": [
+    {
+     "key": "planeb:pgbouncer-scram-verifier",
+     "hash": "7e9c4834c102",
+     "grade": 3
+    },
+    {
+     "key": ".memory:procedures/run-the-local-stack.md",
+     "hash": "06e5420ce835",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g171",
+   "query": "what went wrong with mem.memory_versions?",
+   "expect": [
+    {
+     "key": "planeb:memory-versions-rls-leak",
+     "hash": "2ef309071cdd",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g172",
+   "query": "editing an ingested file raised ExclusionViolation",
+   "expect": [
+    {
+     "key": "planeb:temporal-constraint-blocks-edit",
+     "hash": "ff0e9892ace4",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0006.md",
+     "hash": "0f2c5adc4df8",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g173",
+   "query": "why did embeddings move to Ollama?",
+   "expect": [
+    {
+     "key": "planeb:switch-embeddings-to-ollama",
+     "hash": "2b1e9575e6b3",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g174",
+   "query": "what does scope mean in this system?",
+   "expect": [
+    {
+     "key": ".memory:glossary.md",
+     "hash": "45d201942ded",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g175",
+   "query": "define episode",
+   "expect": [
+    {
+     "key": ".memory:glossary.md",
+     "hash": "45d201942ded",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g176",
+   "query": "is there an unscoped way to open a transaction?",
+   "expect": [
+    {
+     "key": ".memory:conventions.md",
+     "hash": "a432662e4992",
+     "grade": 3
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g177",
+   "query": "can I run the isolation tests as memory_owner?",
+   "expect": [
+    {
+     "key": ".memory:conventions.md",
+     "hash": "a432662e4992",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g178",
+   "query": "why does memory_app connect through PgBouncer in tests?",
+   "expect": [
+    {
+     "key": ".memory:conventions.md",
+     "hash": "a432662e4992",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0007.md",
+     "hash": "3aa314ea28bc",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g179",
+   "query": "what database version does this project target?",
+   "expect": [
+    {
+     "key": ".memory:project.yaml",
+     "hash": "fc938b0576f5",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 2
+    }
+   ],
+   "forbid": []
+  },
+  {
+   "id": "g180",
+   "query": "what is explicitly not allowed in this project's stack?",
+   "expect": [
+    {
+     "key": ".memory:project.yaml",
+     "hash": "fc938b0576f5",
+     "grade": 3
+    },
+    {
+     "key": ".memory:decisions/ADR-0001.md",
+     "hash": "941172dc5f76",
+     "grade": 2
+    }
+   ],
+   "forbid": []
   }
  ],
  "snapshot": "12d2cbc619bf41dc"
