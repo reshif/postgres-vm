@@ -98,6 +98,23 @@ x-common-env: &common-env
   MEMORY_OAUTH_ALGORITHMS: ${MEMORY_OAUTH_ALGORITHMS:-RS256,ES256}
   MEMORY_OAUTH_ORG_CLAIM: ${MEMORY_OAUTH_ORG_CLAIM:-org}
   MEMORY_OAUTH_PROJECT_CLAIM: ${MEMORY_OAUTH_PROJECT_CLAIM:-project}
+
+  # Browser login for the Knowledge Console: authorization-code + PKCE.
+  #
+  # The flow is fully implemented in console-app.tsx — verifier and state in
+  # session storage, S256 challenge, code exchange, no client secret — and was
+  # UNREACHABLE, because these settings were never passed to the API that serves
+  # /v1/console/config. A login screen that cannot be configured is a login
+  # screen that does not exist, and nothing failed loudly to say so.
+  #
+  # Served to the browser, so none of it is secret: a public SPA client has no
+  # client secret and none would be accepted for this grant.
+  MEMORY_CONSOLE_OIDC_CLIENT_ID: ${MEMORY_CONSOLE_OIDC_CLIENT_ID:-}
+  MEMORY_CONSOLE_OIDC_SCOPES: ${MEMORY_CONSOLE_OIDC_SCOPES:-openid profile}
+  MEMORY_CONSOLE_OIDC_REDIRECT_URI: ${MEMORY_CONSOLE_OIDC_REDIRECT_URI:-}
+  MEMORY_CONSOLE_OIDC_RESOURCE: ${MEMORY_CONSOLE_OIDC_RESOURCE:-}
+  MEMORY_CONSOLE_OIDC_AUTHORIZATION_ENDPOINT: ${MEMORY_CONSOLE_OIDC_AUTHORIZATION_ENDPOINT:-}
+  MEMORY_CONSOLE_OIDC_TOKEN_ENDPOINT: ${MEMORY_CONSOLE_OIDC_TOKEN_ENDPOINT:-}
   # Row count at which a per-tenant partial HNSW index is built
   # automatically. 0 disables. Not a hard-coded 50k wait.
   MEMORY_PARTIAL_INDEX_THRESHOLD: ${MEMORY_PARTIAL_INDEX_THRESHOLD:-5000}

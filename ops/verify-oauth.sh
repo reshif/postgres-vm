@@ -143,6 +143,38 @@ expect "no token is unauthorized" 401 \
 expect "a malformed token is unauthorized" 401 \
   "$(call "not.a.jwt" "$TENANT" "$PROJECT")"
 
+# ------------------------------------------------- the console's login flow
+#
+# The browser flow is authorization-code + PKCE and lives in console-app.tsx. It
+# was fully implemented and UNREACHABLE: MEMORY_CONSOLE_OIDC_* was never passed
+# to the API that serves /v1/console/config, so the login screen could not be
+# configured in any deployment and nothing failed loudly to say so.
+#
+# What is checkable from here is that the API advertises a usable client
+# configuration. Completing the redirect needs a browser, so this stops at the
+# boundary rather than pretending otherwise.
+CONSOLE_CFG=$(curl -s "$API/v1/console/config" 2>/dev/null || echo '{}')
+CONFIGURED=$(printf '%s' "$CONSOLE_CFG" | python -c '
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("unreadable"); raise SystemExit
+o = d.get("oidc") or {}
+print("yes" if o.get("configured") and o.get("authorization_endpoint")
+      and o.get("client_id") else "no")' 2>/dev/null || echo "unreadable")
+
+case "$CONFIGURED" in
+  yes) pass "the console advertises a usable OIDC client" ;;
+  no)  printf '  SKIP  the console OIDC client is not configured\n'
+       printf '        set MEMORY_CONSOLE_OIDC_CLIENT_ID / _AUTHORIZATION_ENDPOINT /\n'
+       printf '        _TOKEN_ENDPOINT to exercise the browser login flow:\n'
+       printf '          MEMORY_CONSOLE_OIDC_CLIENT_ID=%s\n' "$CLIENT"
+       printf '          MEMORY_CONSOLE_OIDC_AUTHORIZATION_ENDPOINT=%s/realms/%s/protocol/openid-connect/auth\n' "$KC" "$REALM"
+       printf '          MEMORY_CONSOLE_OIDC_TOKEN_ENDPOINT=%s\n' "$TOKEN_URL" ;;
+  *)   fail "the console config endpoint is readable" "$CONSOLE_CFG" ;;
+esac
+
 printf '%s\n' "------------------------------------------------------------"
 if [ "$FAILED" -ne 0 ]; then
   printf 'OAuth verification FAILED\n'; exit 1

@@ -96,7 +96,7 @@ def recompute_utility(conn: Connection, *, tenant_id: UUID,
             FROM mem.feedback
            WHERE tenant_id = :t AND memory_id IS NOT NULL
            GROUP BY memory_id
-        )
+        ),
         ranked AS (
           -- Usage scored RELATIVE TO THIS PROJECT, not against a constant.
           --
