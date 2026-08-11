@@ -107,10 +107,22 @@ def main() -> None:
         memories = conn.execute(text(
             "SELECT count(*) FROM mem.memories WHERE project_id = :project"),
             {"project": str(PROJECT)}).scalar_one()
-    check("one accepted assertion is persisted", report == {"assertions": 1, "supporting_blobs": 1}, str(report))
+    check("one accepted assertion is persisted", report ==
+          {"assertions": 1, "supporting_blobs": 1, "retracted": 0}, str(report))
     check("assertion provenance is the evidence repository commit", row["source_revision"] == SIDE_SHA)
     check("assertion and source blobs become separate artifacts", artifacts == 2, str(artifacts))
     check("sidecar sync does not create a legacy memory", memories == 0, str(memories))
+
+    with db.scoped(TENANT, PRINCIPAL, PROJECT) as conn:
+        removal = evidence_assertions.persist_sidecar_sync(
+            conn, tenant_id=TENANT, project_id=PROJECT, evidence_repository=EVIDENCE_REPO,
+            evidence_revision=SIDE_SHA, observed_at=datetime.now(timezone.utc),
+            prepared=[], accepted_by=PRINCIPAL)
+        state = conn.execute(text(
+            "SELECT state FROM mem.evidence_assertions WHERE assertion_key = 'pg-storage' "
+            "ORDER BY recorded_at DESC LIMIT 1")).scalar_one()
+    check("deleting an assertion from the sidecar retracts it", removal["retracted"] == 1 and
+          state == "retracted", str(removal))
 
     print("\n3. Bound source references")
     foreign = ASSERTION.replace("sidecar-sync-test/service@", "other-org/other@")

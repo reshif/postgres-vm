@@ -653,6 +653,8 @@ def register_project(req: RegisterProject) -> dict:
             raise HTTPException(422, "a GitHub-native project requires a GitHub source repository")
         if not evidence.startswith("github.com/"):
             raise HTTPException(422, "a GitHub-native project requires a GitHub evidence repository")
+        if source == evidence:
+            raise HTTPException(422, "the GitHub source and evidence repositories must be distinct")
         if not req.github_installation_id:
             raise HTTPException(422, "a GitHub-native project requires a GitHub App installation id")
 
@@ -707,7 +709,28 @@ def register_project(req: RegisterProject) -> dict:
                  "evidence": req.evidence_repo_url,
                  "installation": req.github_installation_id,
                  "branch": (req.git_default_branch or "main")
-                 if req.source_provider == "github" else None}).scalar_one()
+                  if req.source_provider == "github" else None}).scalar_one()
+
+        if req.source_provider == "github":
+            # Webhook routing is intentionally exact: allowing one GitHub repo
+            # to be attached to two projects turns a delivery into ambiguity.
+            # Check both roles so an evidence repository cannot also become a
+            # source repository for another project.
+            from .github_evidence import normalize_repository_url
+
+            bindings = conn.execute(text(
+                "SELECT id, slug, repo_url, evidence_repo_url FROM mem.projects "
+                " WHERE source_provider = 'github' AND id <> :project"),
+                {"project": str(project)}).mappings().all()
+            for binding in bindings:
+                bound = {
+                    normalize_repository_url(str(binding["repo_url"] or "")),
+                    normalize_repository_url(str(binding["evidence_repo_url"] or "")),
+                }
+                if source in bound or evidence in bound:
+                    raise HTTPException(409, (
+                        f"GitHub repository is already bound to project {binding['slug']}; "
+                        "source and evidence repositories must map to exactly one project."))
 
         principal = conn.execute(text(
             "INSERT INTO mem.principals (id, tenant_id, actor, external_id, display_name) "

@@ -1,6 +1,7 @@
 """`memory` — the project-facing CLI (05-BUILD-PLAN Phase 2).
 
-    memory init            scaffold .memory/, register the project, write .mcp.json
+    memory init            scaffold legacy .memory/ knowledge and register the project
+    memory init --github   bind source and evidence repositories without a checkout
     memory status          what this repo is bound to, and what the platform holds
     memory search <query>  search this project's memory
     memory why <topic>     the rationale questions, specifically
@@ -27,7 +28,8 @@ import urllib.request
 from pathlib import Path
 
 API = os.environ.get("MEMORY_API_URL", "http://localhost:8080").rstrip("/")
-BINDING_FILE = ".memory/binding.json"
+LEGACY_BINDING_FILE = ".memory/binding.json"
+GITHUB_BINDING_FILE = ".memory-platform/binding.json"
 
 
 # ----------------------------------------------------------------- plumbing
@@ -75,12 +77,21 @@ def remote_url() -> str:
     return git("remote", "get-url", "origin")
 
 
+def binding_path(root: Path) -> Path | None:
+    """Return the binding without making a GitHub project create `.memory/`."""
+    for relative in (GITHUB_BINDING_FILE, LEGACY_BINDING_FILE):
+        candidate = root / relative
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def load_binding(root: Path) -> dict:
-    f = root / BINDING_FILE
-    if not f.is_file():
-        die(f"this repo is not bound to a project ({BINDING_FILE} missing).\n"
-            f"       run:  memory init")
-    return json.loads(f.read_text(encoding="utf-8"))
+    path = binding_path(root)
+    if path is None:
+        die("this repo is not bound to a project (.memory-platform/binding.json or "
+            ".memory/binding.json missing).\n       run:  memory init --github")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def scope_params(b: dict) -> dict:
@@ -147,6 +158,19 @@ This repository is bound to a memory platform project. Durable knowledge lives i
   it. That is deliberate — do not work around it.
 """
 
+GITHUB_AGENTS_SECTION = """
+## Project knowledge
+
+This repository is bound to a GitHub-native knowledge project. Durable
+engineering knowledge is reviewed in the paired evidence repository, not stored
+in a host-local `.memory/` directory.
+
+- Before non-trivial work, call `memory_context` with the task.
+- Propose assertions and evaluation cases through a pull request to the evidence
+  repository, each citing immutable source commit SHAs.
+- An agent session may propose evidence but cannot accept its own claim.
+"""
+
 
 def cmd_init(args) -> int:
     root = repo_root()
@@ -157,32 +181,54 @@ def cmd_init(args) -> int:
 
     org = args.org or "default"
     slug = args.project or root.name
+    github_native = bool(args.github)
+    if github_native:
+        if not remote:
+            die("a GitHub-native project requires an `origin` GitHub remote")
+        if not args.evidence_repo:
+            die("--github requires --evidence-repo https://github.com/<org>/<project>-evidence")
+        if not args.installation_id:
+            die("--github requires --installation-id from the GitHub App installation")
 
     print(f"repository : {root}")
     print(f"remote     : {remote or '(none)'}")
     print(f"project    : {org}/{slug}")
 
-    # 1. scaffold. Never overwrite: this is somebody's knowledge.
-    mem = root / ".memory"
-    made = []
-    for path, body in (
-        (mem / "project.yaml", PROJECT_YAML.format(name=slug)),
-        (mem / "conventions.md", CONVENTIONS),
-        (mem / "glossary.md", GLOSSARY),
-    ):
-        if not path.exists():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(body, encoding="utf-8")
-            made.append(path.relative_to(root).as_posix())
-    for d in ("decisions", "procedures"):
-        (mem / d).mkdir(parents=True, exist_ok=True)
-    print(f"scaffolded : {', '.join(made) if made else '(already present)'}")
+    # 1. The legacy path scaffolds local knowledge. GitHub-native projects keep
+    # their durable claims in the paired evidence repository and need no local
+    # checkout or .memory directory.
+    binding_relative = GITHUB_BINDING_FILE if github_native else LEGACY_BINDING_FILE
+    if github_native:
+        print("knowledge  : GitHub-native evidence repository (no local scaffold)")
+    else:
+        mem = root / ".memory"
+        made = []
+        for path, body in (
+            (mem / "project.yaml", PROJECT_YAML.format(name=slug)),
+            (mem / "conventions.md", CONVENTIONS),
+            (mem / "glossary.md", GLOSSARY),
+        ):
+            if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(body, encoding="utf-8")
+                made.append(path.relative_to(root).as_posix())
+        for d in ("decisions", "procedures"):
+            (mem / d).mkdir(parents=True, exist_ok=True)
+        print(f"scaffolded : {', '.join(made) if made else '(already present)'}")
 
     # 2. register
-    status, data = _req("POST", "/v1/projects", {
+    registration = {
         "org_slug": org, "project_slug": slug,
         "name": slug, "repo_url": remote or None,
-    })
+    }
+    if github_native:
+        registration.update({
+            "source_provider": "github",
+            "evidence_repo_url": args.evidence_repo,
+            "github_installation_id": args.installation_id,
+            "git_default_branch": args.branch or "main",
+        })
+    status, data = _req("POST", "/v1/projects", registration)
     if status == 409:
         die(f"{data.get('detail', 'binding conflict')}")
     if status not in (200, 201):
@@ -191,12 +237,17 @@ def cmd_init(args) -> int:
           f"{' (new)' if data.get('created') else ' (existing)'}")
 
     # 3. binding file, so every later command knows its scope without guessing
-    (mem / "binding.json").write_text(json.dumps({
+    binding_file = root / binding_relative
+    binding_file.parent.mkdir(parents=True, exist_ok=True)
+    binding_file.write_text(json.dumps({
         "org_slug": org, "project_slug": slug, "repo_url": remote,
         "tenant_id": data["tenant_id"], "project_id": data["project_id"],
         "principal_id": data["principal_id"], "api": API,
+        "source_provider": "github" if github_native else "legacy",
+        "evidence_repo_url": args.evidence_repo if github_native else None,
+        "git_default_branch": (args.branch or "main") if github_native else None,
     }, indent=2) + "\n", encoding="utf-8")
-    print(f"binding    : {BINDING_FILE}")
+    print(f"binding    : {binding_relative}")
 
     # 4. .mcp.json for agent clients
     mcp = root / ".mcp.json"
@@ -211,11 +262,16 @@ def cmd_init(args) -> int:
     # 5. AGENTS.md pointer
     agents = root / "AGENTS.md"
     existing = agents.read_text(encoding="utf-8") if agents.exists() else ""
-    if "## Project memory" not in existing:
-        agents.write_text(existing + AGENTS_SECTION, encoding="utf-8")
-        print("agents     : appended a memory section to AGENTS.md")
+    heading = "## Project knowledge" if github_native else "## Project memory"
+    if heading not in existing:
+        agents.write_text(existing + (GITHUB_AGENTS_SECTION if github_native else AGENTS_SECTION),
+                          encoding="utf-8")
+        print("agents     : appended a knowledge section to AGENTS.md")
 
-    print("\nnext: write a decision into .memory/decisions/ and commit it.")
+    if github_native:
+        print("\nnext: create reviewed assertions in the evidence repository and install the GitHub App.")
+    else:
+        print("\nnext: write a decision into .memory/decisions/ and commit it.")
     return 0
 
 
@@ -235,9 +291,12 @@ def cmd_status(args) -> int:
           f"  isolation={iso.get('pass')}"
           f"  embeddings={checks.get('embeddings', {}).get('ok')}")
 
-    files = sorted(p for p in (root / ".memory").rglob("*")
-                   if p.is_file() and p.name != "binding.json")
-    print(f"local      : {len(files)} file(s) under .memory/")
+    if b.get("source_provider") == "github":
+        print(f"knowledge  : GitHub-native ({b.get('evidence_repo_url') or 'evidence repo missing'})")
+    else:
+        files = sorted(p for p in (root / ".memory").rglob("*")
+                       if p.is_file() and p.name != "binding.json")
+        print(f"local      : {len(files)} file(s) under .memory/")
 
     q = urllib.parse.urlencode({**scope_params(b), "q": "project", "limit": 1})
     st, _ = _req("GET", f"/v1/search?{q}")
@@ -442,10 +501,11 @@ def cmd_doctor(args) -> int:
         detail = c.get("error", "")
         print(f"  {mark} {name}{': ' + str(detail)[:60] if detail else ''}")
 
-    bfile = root / BINDING_FILE
-    print(f"{'ok ' if bfile.is_file() else 'FAIL'} binding file {BINDING_FILE}")
-    if not bfile.is_file():
-        print("     -> run: memory init")
+    bfile = binding_path(root)
+    label = bfile.relative_to(root).as_posix() if bfile else GITHUB_BINDING_FILE
+    print(f"{'ok ' if bfile else 'FAIL'} binding file {label}")
+    if bfile is None:
+        print("     -> run: memory init --github")
         return 1
     b = json.loads(bfile.read_text(encoding="utf-8"))
 
@@ -463,7 +523,11 @@ def cmd_doctor(args) -> int:
 
     memdir = root / ".memory"
     n = len([p for p in memdir.rglob("*") if p.is_file()]) if memdir.is_dir() else 0
-    print(f"{'ok ' if n else 'warn'} .memory/ contains {n} file(s)")
+    github_native = b.get("source_provider") == "github"
+    if github_native:
+        print(f"ok  GitHub-native evidence: {b.get('evidence_repo_url') or '(missing)'}")
+    else:
+        print(f"{'ok ' if n else 'warn'} .memory/ contains {n} file(s)")
 
     q = urllib.parse.urlencode({**scope_params(b), "q": "constraints", "limit": 1})
     st, d = _req("GET", f"/v1/search?{q}")
@@ -471,7 +535,7 @@ def cmd_doctor(args) -> int:
         print(f"FAIL retrieval returned HTTP {st}")
         return 1
     print(f"ok  retrieval responds ({d.get('count', 0)} hit(s) for a smoke query)")
-    if d.get("count", 0) == 0 and n:
+    if d.get("count", 0) == 0 and n and not github_native:
         print("     -> files exist locally but nothing is indexed yet.")
         print("        the scheduler polls every 60s; or POST /v1/ingest to force it.")
     return 0
@@ -494,9 +558,14 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="memory", description="Project memory CLI")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    i = sub.add_parser("init", help="scaffold and register this repository")
+    i = sub.add_parser("init", help="register this repository (legacy scaffold by default)")
     i.add_argument("--org", help="organisation slug (default: 'default')")
     i.add_argument("--project", help="project slug (default: repo directory name)")
+    i.add_argument("--github", action="store_true",
+                   help="bind GitHub source/evidence repositories without .memory/")
+    i.add_argument("--evidence-repo", help="paired private GitHub evidence repository")
+    i.add_argument("--installation-id", type=int, help="GitHub App installation id")
+    i.add_argument("--branch", help="source default branch (default: main)")
     i.set_defaults(fn=cmd_init)
 
     s = sub.add_parser("status", help="what this repo is bound to")

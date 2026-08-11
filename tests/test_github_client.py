@@ -50,6 +50,11 @@ def main() -> None:
             return httpx.Response(200, json={
                 "encoding": "base64", "content": base64.b64encode(content).decode(),
             })
+        if request.url.path == "/repos/example/service/contents/assertions/storage.md":
+            return httpx.Response(200, json={
+                "sha": "blob-file", "encoding": "base64",
+                "content": base64.b64encode(content).decode(),
+            })
         return httpx.Response(404, json={"message": "not found"})
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
@@ -81,11 +86,17 @@ def main() -> None:
         path=blobs[0]["path"], git_sha=blobs[0]["sha"], installation_id=77)
     check("blob preserves requested source revision", blob.revision == "aaaaaaaa")
     check("blob is content-addressed", blob.content_sha256 != "" and blob.byte_size == len(content))
+    file_at_sha = client.get_text_file(
+        repository_url="https://github.com/example/service", revision="aaaaaaaa",
+        path="assertions/storage.md", installation_id=77)
+    check("path read pins the requested commit SHA", file_at_sha.revision == "aaaaaaaa" and
+          file_at_sha.git_sha == "blob-file")
     check("installation token is requested once then cached",
           sum(1 for c in calls if c.url.path.endswith("access_tokens")) == 1)
     auth_headers = [c.headers.get("authorization") for c in calls if c.url.path.startswith("/repos/")]
     check("repository calls use the installation token", auth_headers ==
-          ["Bearer installation-token", "Bearer installation-token"], str(auth_headers))
+          ["Bearer installation-token", "Bearer installation-token", "Bearer installation-token"],
+          str(auth_headers))
 
     print("\n3. Bounds and unsafe input")
     try:

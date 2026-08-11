@@ -25,9 +25,13 @@ cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1
 export MSYS2_ARG_CONV_EXCL='*'
 
-if command -v docker >/dev/null 2>&1; then DOCKER=docker
-elif command -v docker.exe >/dev/null 2>&1; then DOCKER=docker.exe
-else echo "Docker CLI is not available" >&2; exit 1
+if command -v docker >/dev/null 2>&1 && docker version >/dev/null 2>&1; then
+  DOCKER=docker
+elif command -v docker.exe >/dev/null 2>&1 && docker.exe version >/dev/null 2>&1; then
+  DOCKER=docker.exe
+else
+  echo "Docker CLI is not available" >&2
+  exit 1
 fi
 
 FAILED=0

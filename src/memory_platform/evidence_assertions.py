@@ -194,15 +194,20 @@ def record_git_blob(
         " source_revision, location, content_sha256, byte_size, observed_at, metadata) "
         "VALUES (:tenant, :project, 'github', 'git_blob', :external, :repository, "
         "        :revision, :location, :digest, :size, :observed, CAST(:metadata AS jsonb)) "
-        "ON CONFLICT (project_id, provider, kind, external_id) DO UPDATE "
-        "  SET observed_at = EXCLUDED.observed_at "
+        "ON CONFLICT (project_id, provider, kind, external_id) DO NOTHING "
         "RETURNING id"
     ), {
         "tenant": str(tenant_id), "project": str(project_id), "external": external_id,
         "repository": "https://" + normalized, "revision": revision.lower(),
         "location": safe_path.as_posix(), "digest": content_sha256, "size": byte_size,
         "observed": observed_at, "metadata": json.dumps(metadata or {}),
-    }).scalar_one()
+    }).scalar_one_or_none()
+    if row is None:
+        row = conn.execute(text(
+            "SELECT id FROM mem.evidence_artifacts "
+            " WHERE project_id = :project AND provider = 'github' "
+            "   AND kind = 'git_blob' AND external_id = :external"),
+            {"project": str(project_id), "external": external_id}).scalar_one()
     return UUID(str(row))
 
 
@@ -301,7 +306,7 @@ def persist_sidecar_sync(
     prepared: list[PreparedAssertion],
     accepted_by: UUID | None,
 ) -> dict[str, int]:
-    """Persist a prepared revision atomically after all Git reads succeeded."""
+    """Persist a prepared revision and retract assertions deleted from that tree."""
     imported = 0
     for item in prepared:
         source_artifact = record_git_blob(
@@ -323,5 +328,19 @@ def persist_sidecar_sync(
             source_revision=evidence_revision, source_artifact_id=source_artifact,
             supporting_artifact_ids=supports, accepted_by=accepted_by)
         imported += 1
+    present_paths = {item.source_blob.path for item in prepared}
+    rows = conn.execute(text(
+        "SELECT id, source_path FROM mem.evidence_assertions "
+        " WHERE tenant_id = :tenant AND project_id = :project "
+        "   AND source_repository = :repository AND state IN ('accepted', 'contested')"),
+        {"tenant": str(tenant_id), "project": str(project_id),
+         "repository": "https://" + normalize_repository_url(evidence_repository)}).mappings().all()
+    removed = [str(row["id"]) for row in rows if row["source_path"] not in present_paths]
+    if removed:
+        conn.execute(text(
+            "UPDATE mem.evidence_assertions "
+            "   SET state = 'retracted', updated_at = now() "
+            " WHERE id = ANY(CAST(:ids AS uuid[]))"),
+            {"ids": "{" + ",".join(removed) + "}"})
     return {"assertions": imported, "supporting_blobs": sum(
-        len(item.supporting_blobs) for item in prepared)}
+        len(item.supporting_blobs) for item in prepared), "retracted": len(removed)}
