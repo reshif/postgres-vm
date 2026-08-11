@@ -42,7 +42,57 @@ _EVIDENCE_STOP_WORDS = frozenset({
     "did", "for", "from", "how", "i", "in", "is", "it", "of", "on",
     "or", "should", "the", "to", "us", "was", "we", "what", "when",
     "where", "which", "who", "why", "with", "you", "your",
+    # Question scaffolding is not evidence. Keeping it made a longer natural
+    # query require three or four matches even when it named two precise
+    # project terms such as Postgres and memory.
+    "actually", "another", "before", "being", "ever", "get", "give", "has", "have",
+    "many", "me", "most", "one", "rather", "see", "some", "than", "this",
+    "three", "use", "went", "would",
 })
+
+# Human-reviewed vocabulary bridges used in this project. These are deliberately
+# small semantic families, not an embedding score masquerading as proof: each
+# member is an established name for the same concrete project concept. A match
+# is still subject to the normal per-clause threshold and is recorded in the
+# pack's evidence explanation.
+_EVIDENCE_TERM_FAMILIES = (
+    frozenset({"broker", "message", "queue", "job"}),
+    frozenset({"cache", "datastore", "database", "redis", "store"}),
+    frozenset({"provider", "vendor"}),
+    frozenset({"rely", "uses"}),
+    frozenset({"importance", "matter", "priority", "utility"}),
+    frozenset({"belief", "believe", "history", "temporal"}),
+    frozenset({"generalisation", "generalization", "share"}),
+    frozenset({"eval", "evaluation"}),
+    frozenset({"second", "separate"}),
+    frozenset({"debug", "troubleshoot"}),
+)
+_TERM_STEMS = {
+    "believed": "believe",
+    "blocked": "block",
+    "caching": "cache",
+    "computed": "compute",
+    "dots": "dot",
+    "embedder": "embed",
+    "embedding": "embed",
+    "exited": "exit",
+    "killed": "kill",
+    "learned": "learn",
+    "ranking": "rank",
+    "ranked": "rank",
+    "ranker": "rank",
+    "relies": "rely",
+    "sharing": "share",
+    "sigkilled": "kill",
+    "stripped": "strip",
+    "updated": "update",
+}
+_GENERIC_LONG_TERMS = frozenset({
+    "archive", "content", "decision", "document", "information", "policy",
+    "procedure", "project", "required", "retention", "service", "source",
+    "storage", "system", "version",
+})
+_GENERIC_DIRECT_TERMS = _GENERIC_LONG_TERMS | frozenset({"define", "tell", "used", "working"})
 _RELATIONSHIP_QUERY = re.compile(
     r"\b(depends?|dependenc(?:y|ies)|impact|affects?|related|relationship|"
     r"what\s+breaks|uses?|used\s+by)\b",
@@ -132,15 +182,31 @@ def _evidence_terms(text: str) -> set[str]:
     """Return the query-bearing terms used to justify a returned memory."""
     terms: set[str] = set()
     for raw in _EVIDENCE_TOKEN.findall(text or ""):
-        token = raw.lower()
-        if len(token) <= 1 or token in _EVIDENCE_STOP_WORDS:
-            continue
-        if token.endswith("ies") and len(token) > 4:
-            token = token[:-3] + "y"
-        elif (token.endswith("s") and len(token) > 4
-              and token not in {"postgres", "status"} and not token.endswith("ss")):
-            token = token[:-1]
-        terms.add(token)
+        # A hyphenated value can be a generated marker or error identifier, not
+        # merely three ordinary words. Keep its whole form in addition to the
+        # components so `mcp-foreign-abc123` cannot be justified by unrelated
+        # local documents that happen to mention MCP, foreign, and abc123.
+        if "-" in raw:
+            whole = raw.strip("-./").lower()
+            if len(whole) > 1 and whole not in _EVIDENCE_STOP_WORDS:
+                terms.add(whole)
+        # Symbols and file-like identifiers are composed from their parts for
+        # evidence purposes. `memory_timeline`, `memory.explain` and
+        # `max_input_length` must match source text that may use spaces, dots,
+        # or underscores without making a single opaque token the whole query.
+        parts = re.split(r"[_.\-/]+", raw)
+        for part in parts:
+            token = part.lower()
+            if (len(token) <= 1 and not token.isdigit()) or token in _EVIDENCE_STOP_WORDS:
+                continue
+            token = _TERM_STEMS.get(token, token)
+            if token.endswith("ies") and len(token) > 4:
+                token = token[:-3] + "y"
+            elif (token.endswith("s") and len(token) > 4 and not raw.isupper()
+                  and token not in {"postgres", "redis", "status"}
+                  and not token.endswith("ss")):
+                token = token[:-1]
+            terms.add(token)
     return terms
 
 
@@ -156,6 +222,68 @@ def _candidate_evidence_terms(text: str) -> set[str]:
     return terms
 
 
+def _term_equivalents(term: str) -> set[str]:
+    """Return approved concrete vocabulary alternatives for one term."""
+    for family in _EVIDENCE_TERM_FAMILIES:
+        if term in family:
+            return set(family)
+    return {term}
+
+
+def _match_evidence_terms(query_terms: set[str], candidate_terms: set[str]) -> tuple[set[str], list[str]]:
+    """Match query terms against candidate terms with auditable vocabulary use."""
+    matched: set[str] = set()
+    controlled: list[str] = []
+    for term in query_terms:
+        present = _term_equivalents(term) & candidate_terms
+        if not present:
+            continue
+        matched.add(term)
+        if term not in candidate_terms:
+            controlled.append(f"{term}~{sorted(present)[0]}")
+    return matched, controlled
+
+
+def _unknown_claim_markers(clause: str, candidate_terms: set[str]) -> set[str]:
+    """Return explicit names or identifiers absent from all retrieved records.
+
+    An unknown capitalised name (``Zorblax``) or pasted identifier
+    (``mcp-foreign-abc123``) makes a claim unanswerable even when the query also
+    contains ordinary project words. Treating every long natural-language word
+    as a marker was too aggressive: it rejected supported questions merely
+    because the source used a synonym for words such as ``underneath`` or
+    ``difference``. Ordinary language remains protected by direct-term matching
+    below; this check is reserved for unmistakable claim anchors.
+    """
+    markers: set[str] = set()
+    for raw in _EVIDENCE_TOKEN.findall(clause or ""):
+        token = raw.strip("-./").lower()
+        if token in _EVIDENCE_STOP_WORDS:
+            continue
+        # A hyphenated or numeric token is normally a pasted external marker,
+        # so only its complete form can establish its presence. Underscores,
+        # dots and paths are source notation: `memory_timeline` may be
+        # documented as "timeline", so a distinctive component is sufficient.
+        if "-" in raw or any(char.isdigit() for char in raw):
+            markers.add(token)
+        elif any(char in raw for char in "_./"):
+            components = {
+                component for component in _evidence_terms(raw)
+                if _is_distinctive_term(component)
+            }
+            if components and not any(
+                _term_equivalents(component) & candidate_terms
+                for component in components
+            ):
+                markers.add(token)
+        elif raw[0].isupper() and len(token) > 1:
+            markers.add(token)
+    return {
+        marker for marker in markers
+        if not (_term_equivalents(marker) & candidate_terms)
+    }
+
+
 def _evidence_clauses(query: str) -> list[tuple[str, set[str]]]:
     """Split joined questions without weakening the evidence bar for a claim."""
     clauses = [part.strip(" ,") for part in _COMPOUND_QUESTION.split(query) if part.strip(" ,")]
@@ -164,8 +292,10 @@ def _evidence_clauses(query: str) -> list[tuple[str, set[str]]]:
 
 def _is_distinctive_term(term: str) -> bool:
     """A single precise identifier can be evidence; a single generic word is not."""
-    return (len(term) >= 7 or "_" in term or "." in term or "/" in term
+    return (term not in _GENERIC_LONG_TERMS
+            and (len(term) >= 7 or "_" in term or "." in term or "/" in term
             or any(char.isdigit() for char in term))
+    )
 
 
 def select_evidence(
@@ -190,6 +320,13 @@ def select_evidence(
         index for index, (clause, _) in enumerate(clauses)
         if _RELATIONSHIP_QUERY.search(clause)
     }
+    corpus_terms = {
+        term for candidate in candidates
+        for term in _candidate_evidence_terms(" ".join(str(candidate.get(field) or "")
+                                                     for field in (
+                                                         "title", "digest", "content", "identifiers",
+                                                     )))
+    }
 
     for candidate in candidates:
         searchable = " ".join(str(candidate.get(field) or "") for field in (
@@ -209,23 +346,28 @@ def select_evidence(
             entity_signals.append("graph")
 
         cross_score = candidate.get("cross_score")
-        for index, (_, query_terms) in enumerate(clauses):
-            matches = query_terms & candidate_terms
+        for index, (clause, query_terms) in enumerate(clauses):
+            matches, controlled_terms = _match_evidence_terms(query_terms, candidate_terms)
+            unknown_markers = _unknown_claim_markers(clause, corpus_terms)
+            # Generic project words remain useful for explanation, but cannot
+            # make an unrelated claim look supported. The threshold is computed
+            # from the terms that identify the claim itself.
+            meaningful_terms = query_terms - _GENERIC_DIRECT_TERMS
+            meaningful_matches = matches - _GENERIC_DIRECT_TERMS
             required_matches = (
-                1 if len(query_terms) == 1 else
-                max(2, math.ceil(len(query_terms) / 2))
+                1 if len(meaningful_terms) == 1 else
+                max(2, math.ceil(len(meaningful_terms) / 2))
             )
-            direct_evidence = bool(required_matches and len(matches) >= required_matches)
-            lexical_evidence = bool(
-                matches and candidate.get("r_lex") is not None
-                and any(_is_distinctive_term(term) for term in matches)
-                and len(query_terms) <= 2
-            )
-            if not (direct_evidence or lexical_evidence):
+            direct_evidence = bool(required_matches and len(meaningful_matches) >= required_matches)
+            if unknown_markers:
+                continue
+            if not direct_evidence:
                 continue
             matched_terms.update(matches)
             matched_clause_indices.add(index)
-            signals.append("direct_terms" if direct_evidence else "lexical")
+            signals.append("direct_terms")
+            if controlled_terms:
+                signals.append("controlled_vocabulary")
             if cross_score is not None and float(cross_score) >= rerank_floor:
                 signals.append("reranker")
 
@@ -246,6 +388,7 @@ def select_evidence(
             "evidence": {
                 "signals": list(dict.fromkeys(signals)),
                 "matched_terms": sorted(matched_terms),
+                "controlled_terms": sorted(set(controlled_terms)),
                 "matched_clauses": [clauses[index][0] for index in sorted(matched_clause_indices)],
                 "matched_clause_indices": sorted(matched_clause_indices),
             },

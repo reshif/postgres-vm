@@ -101,6 +101,115 @@ def main() -> None:
           and "reranker" in corroborated[0]["evidence"]["signals"]
           and outcome["status"] == "supported", str(outcome))
 
+    identifier, outcome = memories.select_evidence(
+        "should I add a memory_timeline tool",
+        [candidate(id="surface", title="Four-tool MCP surface",
+                   digest="Resources expose the timeline without another tool.")],
+    )
+    check("identifier components match equivalent source notation",
+          [item["id"] for item in identifier] == ["surface"]
+          and outcome["status"] == "supported", str(outcome))
+
+    vocabulary, outcome = memories.select_evidence(
+        "do we need a message broker",
+        [candidate(id="queue", title="PostgreSQL-backed job queue",
+                   digest="The job queue avoids a separate broker.")],
+    )
+    check("reviewed vocabulary bridges concrete project synonyms",
+          [item["id"] for item in vocabulary] == ["queue"]
+          and "controlled_vocabulary" in vocabulary[0]["evidence"]["signals"]
+          and outcome["status"] == "supported", str(outcome))
+
+    marker, outcome = memories.select_evidence(
+        "mcp-foreign-abc12345",
+        [candidate(id="local", title="MCP foreign protocol abc12345",
+                   digest="A local MCP cross-client record.")],
+    )
+    check("a compound identifier cannot match on its individual words only",
+          marker == [] and outcome["status"] == "no_relevant_evidence", str(outcome))
+
+    generic, outcome = memories.select_evidence(
+        "what documents are required to sell a used car",
+        [candidate(id="generic", title="Required project document",
+                   digest="The document is used by the project service.")],
+    )
+    check("generic long words do not bypass the direct-evidence threshold",
+          generic == [] and outcome["status"] == "no_relevant_evidence", str(outcome))
+
+    natural_language, outcome = memories.select_evidence(
+        "what does Procrastinate rely on underneath",
+        [candidate(id="queue", title="PostgreSQL-backed job queue",
+                   digest="Procrastinate uses LISTEN NOTIFY and SKIP LOCKED.")],
+    )
+    check("ordinary wording does not hide a record with a matching project name",
+          [item["id"] for item in natural_language] == ["queue"]
+          and outcome["status"] == "supported", str(outcome))
+
+    generic_adjective, outcome = memories.select_evidence(
+        "Which company has the highest share price today?",
+        [candidate(id="sharing", title="Cross-project sharing",
+                   digest="The highest trust tier is authoritative.")],
+    )
+    check("generic adjectives do not become project evidence",
+          generic_adjective == [] and outcome["status"] == "no_relevant_evidence", str(outcome))
+
+    generic_quality, outcome = memories.select_evidence(
+        "Where can I find a reliable birdwatching guide?",
+        [candidate(id="rls", title="RLS isolation", digest="Reliable scope resolution is required.")],
+    )
+    check("an unrelated query cannot be supported by a shared adjective",
+          generic_quality == [] and outcome["status"] == "no_relevant_evidence", str(outcome))
+
+    shell_flag, outcome = memories.select_evidence(
+        "auto-truncate max-batch-tokens",
+        [candidate(id="embedder", title="Embedding service limits",
+                   digest="Pass --auto-truncate with max-batch-tokens.")],
+    )
+    check("shell flags match source text with leading dashes",
+          [item["id"] for item in shell_flag] == ["embedder"]
+          and outcome["status"] == "supported", str(outcome))
+
+    lifecycle_literal, outcome = memories.select_evidence(
+        "init exited 0, is that a failure?",
+        [candidate(id="startup", title="Init lifecycle", digest="init Exited (0) is success, not failure.")],
+    )
+    check("numeric lifecycle literals remain evidence tokens",
+          [item["id"] for item in lifecycle_literal] == ["startup"]
+          and outcome["status"] == "supported", str(outcome))
+
+    sql_command, outcome = memories.select_evidence(
+        "SHOW POOLS",
+        [candidate(id="pooler", title="Pooler verification", digest="SHOW POOLS reports active clients.")],
+    )
+    check("uppercase SQL commands preserve their exact plural form",
+          [item["id"] for item in sql_command] == ["pooler"]
+          and outcome["status"] == "supported", str(outcome))
+
+    underscored_source, outcome = memories.select_evidence(
+        "OLLAMA_HOST connection refused",
+        [candidate(id="embedder", title="Container connection",
+                   digest="Set OLLAMA_HOST when the container connection is refused.")],
+    )
+    check("uppercase underscore notation matches its documented components",
+          [item["id"] for item in underscored_source] == ["embedder"]
+          and outcome["status"] == "supported", str(outcome))
+
+    labelled_arm, outcome = memories.select_evidence(
+        "what is arm B in the eval?",
+        [candidate(id="evaluation", title="Evaluation arms", digest="Arm B is the filesystem baseline eval.")],
+    )
+    check("single-letter labels do not become absent foreign identifiers",
+          [item["id"] for item in labelled_arm] == ["evaluation"]
+          and outcome["status"] == "supported", str(outcome))
+
+    glossary_definition, outcome = memories.select_evidence(
+        "define episode",
+        [candidate(id="glossary", title="Glossary", digest="An episode is an observed operational record.")],
+    )
+    check("definition phrasing leaves the subject as the evidence anchor",
+          [item["id"] for item in glossary_definition] == ["glossary"]
+          and outcome["status"] == "supported", str(outcome))
+
     linked, outcome = memories.select_evidence(
         "what is the Zorblax retention rule for pgvector",
         [candidate(id="linked", title="pgvector storage decision", r_graph=1)],

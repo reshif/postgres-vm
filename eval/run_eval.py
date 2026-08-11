@@ -39,6 +39,7 @@ sys.path.insert(0, "/repo/eval")
 from memory_platform import context, db, evaluation, ingest, memories, ranking  # noqa: E402
 from memory_platform.config import settings  # noqa: E402
 import seed_negatives  # noqa: E402
+import seed_scale  # noqa: E402
 from cases import forbidden_labels, suite_one_coverage_issues, validate_golden  # noqa: E402
 
 # A dedicated tenant, and it must NOT be the one the scheduler's dev binding
@@ -48,6 +49,13 @@ from cases import forbidden_labels, suite_one_coverage_issues, validate_golden  
 TENANT = UUID("ea1a0000-0000-0000-0000-00000000e001")
 PROJECT = UUID("ea1a0000-0000-0000-0000-00000000e002")
 PRINCIPAL = UUID("ea1a0000-0000-0000-0000-00000000e003")
+
+# Scale runs use a separate database scope.  Synthetic distractors must never
+# persist in the acceptance tenant, otherwise a later normal run is no longer
+# comparable with its previous baseline.
+SCALE_TENANT = UUID("ea1a0000-0000-0000-0000-00000000e011")
+SCALE_PROJECT = UUID("ea1a0000-0000-0000-0000-00000000e012")
+SCALE_PRINCIPAL = UUID("ea1a0000-0000-0000-0000-00000000e013")
 
 # The PINNED corpus, not the live tree. See eval/SNAPSHOT.md: a benchmark that
 # moves when the product moves cannot answer "did this change help".
@@ -120,23 +128,35 @@ def forbidden_at_k(ranked: list[str], forbidden: set[str], k: int) -> int:
 
 
 # ---------------------------------------------------------------- corpus
-def build_corpus() -> dict[str, str]:
+def build_corpus(
+    *,
+    include_scale: bool = False,
+    tenant_id: UUID = TENANT,
+    project_id: UUID = PROJECT,
+    principal_id: UUID = PRINCIPAL,
+) -> dict[str, str]:
     """Ingest the real .memory/ tree, return {memory_key: content_hash}."""
     with db.engine().begin() as c:
         c.execute(text("INSERT INTO mem.organizations (id,slug,name) "
-                       "VALUES (:i,'eval','Eval') ON CONFLICT DO NOTHING"),
-                  {"i": str(TENANT)})
+                       "VALUES (:i,:slug,:name) ON CONFLICT DO NOTHING"),
+                  {"i": str(tenant_id),
+                   "slug": "eval-scale" if include_scale else "eval",
+                   "name": "Eval scale" if include_scale else "Eval"})
         c.execute(text("INSERT INTO mem.projects (id,tenant_id,slug,name) "
-                       "VALUES (:i,:t,'eval-corpus','Eval') ON CONFLICT DO NOTHING"),
-                  {"i": str(PROJECT), "t": str(TENANT)})
+                       "VALUES (:i,:t,:slug,:name) ON CONFLICT DO NOTHING"),
+                  {"i": str(project_id), "t": str(tenant_id),
+                   "slug": "eval-scale-corpus" if include_scale else "eval-corpus",
+                   "name": "Eval scale" if include_scale else "Eval"})
         c.execute(text("INSERT INTO mem.principals "
                        "  (id,tenant_id,actor,external_id,display_name) "
-                       "VALUES (:i,:t,'agent',:e,'eval') ON CONFLICT DO NOTHING"),
-                  {"i": str(PRINCIPAL), "t": str(TENANT), "e": f"eval-{PRINCIPAL}"})
+                       "VALUES (:i,:t,'agent',:e,:name) ON CONFLICT DO NOTHING"),
+                  {"i": str(principal_id), "t": str(tenant_id),
+                   "e": f"eval-{principal_id}",
+                   "name": "eval-scale" if include_scale else "eval"})
 
-    with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
-        report = ingest.ingest_tree(c, REPO_ROOT, tenant_id=TENANT,
-                                    project_id=PROJECT, principal_id=PRINCIPAL)
+    with db.scoped(tenant_id, principal_id, project_id) as c:
+        report = ingest.ingest_tree(c, REPO_ROOT, tenant_id=tenant_id,
+                                    project_id=project_id, principal_id=principal_id)
 
         # Plane B: failures, successes and episodes arrive through the write path
         # with a system source_type, never as reviewed files. Seeding them is not
@@ -146,7 +166,7 @@ def build_corpus() -> dict[str, str]:
         # a ranking reason.
         for seed in json.loads((LIVE_ROOT / "eval" / "plane_b.json").read_text("utf-8")):
             memories.write_memory(
-                c, tenant_id=TENANT, project_id=PROJECT, principal_id=PRINCIPAL,
+                c, tenant_id=tenant_id, project_id=project_id, principal_id=principal_id,
                 mtype=seed["type"], title=seed["title"], content=seed["content"],
                 source_type=seed["source"], memory_key=f"planeb:{seed['key']}")
 
@@ -160,14 +180,19 @@ def build_corpus() -> dict[str, str]:
         # the corpus by construction, and so seed_into re-asserts on every run
         # that each one is still contained. A negative label that has quietly
         # become retrievable turns the gate red with no regression behind it.
-        negatives = seed_negatives.seed_into(c, TENANT, PROJECT, PRINCIPAL, quiet=True)
+        negatives = seed_negatives.seed_into(c, tenant_id, project_id, principal_id, quiet=True)
         print(f"  negatives: {len(negatives)} contained fixtures "
               f"(retired + untrusted) seeded for forbidden@k")
+
+        if include_scale:
+            scale = seed_scale.seed_into(c, tenant_id, project_id, principal_id)
+            print(f"  scale: {scale['created']} created, {scale['unchanged']} unchanged "
+                  f"active observed distractors")
 
         rows = c.execute(text(
             "SELECT memory_key, content_hash FROM mem.memories "
             " WHERE tenant_id = :t AND upper(valid_at) IS NULL"),
-            {"t": str(TENANT)}).all()
+            {"t": str(tenant_id)}).all()
     # 04-EVALUATION.md §5 requires a pinned corpus. The fingerprint makes the
     # exact benchmark input visible, so results from different snapshots cannot
     # be misread as a retrieval regression.
@@ -190,7 +215,7 @@ def build_corpus() -> dict[str, str]:
     return {k: h for k, h in rows}
 
 
-def run(case_ids: set[str] | None = None) -> int:
+def run(case_ids: set[str] | None = None, *, include_scale: bool = False) -> int:
     golden = json.loads(GOLDEN.read_text("utf-8"))
     validate_golden(golden)
     cases = golden["cases"]
@@ -200,7 +225,16 @@ def run(case_ids: set[str] | None = None) -> int:
         if missing_ids:
             print(f"unknown case id(s): {', '.join(sorted(missing_ids))}", file=sys.stderr)
             return 2
-    corpus = build_corpus()
+    tenant_id, project_id, principal_id = (
+        (SCALE_TENANT, SCALE_PROJECT, SCALE_PRINCIPAL)
+        if include_scale else (TENANT, PROJECT, PRINCIPAL)
+    )
+    corpus = build_corpus(
+        include_scale=include_scale,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        principal_id=principal_id,
+    )
 
     # §5: "cases are labelled with the memory IDs AND a stable content hash, so
     # corpus edits do not silently invalidate a case."
@@ -224,14 +258,14 @@ def run(case_ids: set[str] | None = None) -> int:
             print(f"  {cid}: {k}")
 
     key_by_id: dict[str, str] = {}
-    with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
+    with db.scoped(tenant_id, principal_id, project_id) as c:
         for mid, mkey in c.execute(text(
             "SELECT id, memory_key FROM mem.memories WHERE tenant_id = :t"),
-                {"t": str(TENANT)}).all():
+                {"t": str(tenant_id)}).all():
             key_by_id[str(mid)] = mkey
 
     per_case, latencies = [], []
-    with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
+    with db.scoped(tenant_id, principal_id, project_id) as c:
         for case in cases:
             t0 = time.perf_counter()
             # Scope is required for entity resolution; without it the graph
@@ -242,7 +276,7 @@ def run(case_ids: set[str] | None = None) -> int:
             # candidates; without this distinction every failure looks like a
             # generic ranking problem.
             hits = memories.search(c, case["query"], limit=40,
-                                   tenant_id=TENANT, project_id=PROJECT)
+                                   tenant_id=tenant_id, project_id=project_id)
             latencies.append((time.perf_counter() - t0) * 1000)
 
             ranked = [key_by_id.get(str(h["id"]), "?") for h in hits]
@@ -280,18 +314,20 @@ def run(case_ids: set[str] | None = None) -> int:
     failures = [*gate_failures(agg, p95_latency), *(
         ["golden_coverage"] if coverage_issues else [])]
     run_status = "passed" if not failures else "failed"
-    with db.scoped(TENANT, PRINCIPAL, PROJECT) as c:
+    with db.scoped(tenant_id, principal_id, project_id) as c:
         profile, _ = ranking.load_profile(c)
         evaluation.record_run(
-            c, tenant_id=TENANT, project_id=PROJECT, principal_id=PRINCIPAL,
-            suite="retrieval-accuracy", status=run_status,
+            c, tenant_id=tenant_id, project_id=project_id, principal_id=principal_id,
+            suite="retrieval-accuracy-scale" if include_scale else "retrieval-accuracy",
+            status=run_status,
             corpus_snapshot=str(golden.get("snapshot") or ""),
             ranking_profile=profile,
             metrics={**agg, "p95_latency_ms": round(p95_latency, 3),
                      "forbidden@10": agg["forbidden@10"], "case_count": len(cases),
                      "forbidden_labelled_cases": sum(bool(forbidden_labels(case)) for case in cases)},
             configuration={"rerank_enabled": settings().rerank_enabled,
-                           "embedding_model": settings().embedding_model},
+                           "embedding_model": settings().embedding_model,
+                           "synthetic_scale": include_scale},
             cases=[{
                 "case_id": case["id"], "query_text": case["query"],
                 "status": "passed" if case["recall@5"] == 1
@@ -300,7 +336,8 @@ def run(case_ids: set[str] | None = None) -> int:
             } for case in per_case],
         )
 
-    print(f"\n{'='*66}\nSuite 1 — retrieval accuracy   ({len(cases)} cases)\n{'='*66}")
+    suite_name = "Suite 1 scale — retrieval accuracy" if include_scale else "Suite 1 — retrieval accuracy"
+    print(f"\n{'='*66}\n{suite_name}   ({len(cases)} cases)\n{'='*66}")
     for m in ("recall@1", "recall@3", "recall@5", "recall@10", "mrr", "ndcg@10"):
         gate = GATES.get(m)
         mark = "" if gate is None else ("  PASS" if agg[m] >= gate else "  FAIL")
@@ -337,5 +374,8 @@ if __name__ == "__main__":
     args = argparse.ArgumentParser(description="Run Suite 1 retrieval evaluation")
     args.add_argument("--case", action="append", dest="case_ids",
                       help="run one golden case id; repeat for multiple cases")
+    args.add_argument("--scale", action="store_true",
+                      help="seed the synthetic 150-record noise corpus; diagnostic only")
     parsed = args.parse_args()
-    sys.exit(run(set(parsed.case_ids) if parsed.case_ids else None))
+    sys.exit(run(set(parsed.case_ids) if parsed.case_ids else None,
+                 include_scale=parsed.scale))

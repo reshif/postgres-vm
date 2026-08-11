@@ -280,6 +280,19 @@ def main() -> None:
     check("and flagged as unverified",
           all(i["unverified"] for i in u_items if "guessed" in (i["title"] or "")))
 
+    print("\n8b. Digest-first budget accounting")
+    oversized = {
+        "id": "large-decision", "title": "A large decision", "digest": "Short digest.",
+        "type": "decision", "tier": "authoritative", "token_cost": 2400,
+    }
+    allocated, budget_dropped = context._allocate([oversized], 400)
+    rendered = allocated["decisions"][0]
+    check("a source document is charged by its emitted digest",
+          not budget_dropped and rendered["token_cost"] < 88,
+          str({"rendered": rendered["token_cost"], "source": rendered["source_token_cost"]}))
+    check("the original source size remains inspectable",
+          rendered["source_token_cost"] == 2400)
+
     # ---- 9. the always-included set (blueprint 5.2) ----------------------
     # "project constraints, conventions and the project state digest... must
     # never lose a ranking fight." They were losing every one: a single
@@ -316,9 +329,9 @@ def main() -> None:
           types_in(big, "constraints") <= {"constraint", "convention", "preference"},
           str(types_in(big, "constraints")))
     check("a document larger than the section cap is still admitted",
-          any(int(i.get("token_cost") or 0) > int(4000 * context.ALLOCATION["constraints"])
+          any(int(i.get("source_token_cost") or 0) > int(4000 * context.ALLOCATION["constraints"])
               for i in big["sections"]["constraints"]),
-          str([i.get("token_cost") for i in big["sections"]["constraints"]]))
+          str([i.get("source_token_cost") for i in big["sections"]["constraints"]]))
     check("still present at minimum budget (never loses a ranking fight)",
           len(small["sections"]["constraints"]) >= 1,
           str(len(small["sections"]["constraints"])))

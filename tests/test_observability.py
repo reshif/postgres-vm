@@ -195,6 +195,14 @@ def main() -> None:
     check("every required service endpoint is healthy", not failed_probes,
           ", ".join(failed_probes))
 
+    # The console's static files can remain healthy after the API container is
+    # recreated while nginx keeps an old Docker DNS result for its proxy. The
+    # resolver is part of the readiness contract, not just proxy configuration.
+    nginx = Path("/repo/console/nginx.conf").read_text("utf-8")
+    check("console re-resolves the API after container replacement",
+          "resolver 127.0.0.11" in nginx
+          and "proxy_pass http://$api_host:8080" in nginx)
+
     heartbeats = {
         row["metric"].get("service"): float(row["value"][1])
         for row in promql("memory_service_heartbeat_timestamp_seconds")

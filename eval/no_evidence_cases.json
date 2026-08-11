@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "purpose": "Queries that must receive an explicit no-evidence response from the current project memory.",
+  "cases": [
+    {"id": "n01", "query": "Who is the hero in Bangladesh?"},
+    {"id": "n02", "query": "What will the weather be in Chennai tomorrow?"},
+    {"id": "n03", "query": "Give me a recipe for mushroom risotto."},
+    {"id": "n04", "query": "Which company has the highest share price today?"},
+    {"id": "n05", "query": "How do I renew a passport in Canada?"},
+    {"id": "n06", "query": "What is the recommended treatment for a sprained ankle?"},
+    {"id": "n07", "query": "Who won the most recent football world cup?"},
+    {"id": "n08", "query": "Translate good morning into Japanese."},
+    {"id": "n09", "query": "What is a fair lease rate for an apartment in Berlin?"},
+    {"id": "n10", "query": "How should I prepare for a marathon?"},
+    {"id": "n11", "query": "Which guitar strings suit a jazz player?"},
+    {"id": "n12", "query": "Explain the causes of the Roman empire's decline."},
+    {"id": "n13", "query": "Where can I find a reliable birdwatching guide?"},
+    {"id": "n14", "query": "How do I calculate income tax for a freelancer?"},
+    {"id": "n15", "query": "What should I pack for a trek in the Himalayas?"},
+    {"id": "n16", "query": "Recommend a bedtime story for a five year old."},
+    {"id": "n17", "query": "Which camera lens is best for wildlife photographs?"},
+    {"id": "n18", "query": "What documents are required to sell a used car?"},
+    {"id": "n19", "query": "How does a solar eclipse happen?"},
+    {"id": "n20", "query": "What are the rules of chess castling?"}
+  ]
+}

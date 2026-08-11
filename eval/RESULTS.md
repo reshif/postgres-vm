@@ -10,13 +10,48 @@ Gates (04-EVALUATION.md §3 and 05-BUILD-PLAN Phase 3): `recall@5 ≥ 0.90`,
 
 ## Current acceptance status
 
-**Suite 1 is not complete.** The pinned corpus has 55 reviewed cases, below the
-150-case minimum, and none carries a reviewed `forbidden_memory_ids` label.
-That makes a reported `forbidden@10 = 0` vacuous: the evaluator has no unsafe
-or wrong result it is required to reject. `python eval/cases.py validate` and
-the evaluator now fail with `golden_coverage` until there are at least 150 cases
-and 15 negatively labelled cases. The historical rows below remain useful
-diagnostics for ranking changes; they are not acceptance evidence.
+**Suite 1 is not complete.** The acceptance set now has 180 reviewed positive
+cases and 20 contained negative fixtures. The golden-set SHA-256 is
+`9BE72FD1753BB83D60EE9287772C9B37F83C80D8AD30375C0C3ABD0AC0D32ED4`.
+Coverage validation passes and `forbidden@10` is meaningful: retired and
+untrusted fixtures are present in the corpus and must never be returned.
+
+Latest no-reranker run, 53 memories (23 Plane A, 10 Plane B, 20 contained
+negative fixtures), corpus fingerprint `2bfbfc018ef4`:
+
+| metric | result | gate |
+|---|---:|---:|
+| recall@1 | 0.660 | - |
+| recall@3 | 0.834 | - |
+| recall@5 | 0.883 | 0.90 fail |
+| recall@10 | 0.939 | - |
+| MRR | 0.820 | 0.75 pass |
+| nDCG@10 | 0.833 | 0.70 pass |
+| forbidden@10 | 0 | 0 pass |
+| p95 end-to-end latency | 634 ms | < 300 ms fail |
+
+The context-pack surface is measured separately because an agent receives a
+filtered, budgeted pack rather than a raw search list. On 180 positive and 20
+out-of-project requests it now reports `evidence_recall = 0.916`,
+`no_evidence_precision = 1.000`, and `forbidden_in_pack = 0`. The p95 for the
+last CPU-only run was 1299 ms (recent repeated runs ranged from 826 to 1299 ms),
+so latency is deliberately still a failed gate. This host has no GPU; that is an
+explanation, not an exemption.
+
+An isolated scale run uses a different tenant and project, then adds 150 active
+observed distractors. At 203 memories it measured `recall@5 = 0.886`,
+`MRR = 0.839`, `nDCG@10 = 0.846`, `forbidden@10 = 0`, and p95 588 ms. The scale
+fixture cannot contaminate the acceptance tenant. It demonstrates that this
+small noise corpus does not collapse retrieval, but it does not satisfy the
+recall or latency gates.
+
+The current CPU cross-encoder is not the default: on the hardened 180-case
+corpus it reduced recall@5 from 0.883 to 0.870 and increased p95 from roughly
+646 ms to 3139 ms. Keep it available for diagnosis, but do not present it as a
+quality improvement until a new controlled evaluation proves otherwise.
+
+The historical rows below are retained for provenance only. They use smaller
+corpora or earlier golden sets and must not be compared with the current results.
 
 ## Suite 6 and Suite 7 status
 
